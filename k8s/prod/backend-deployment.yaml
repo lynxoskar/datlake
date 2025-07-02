@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ducklake-backend
+  labels:
+    app: ducklake-backend
+spec:
+  replicas: 2 # More replicas for production
+  selector:
+    matchLabels:
+      app: ducklake-backend
+  template:
+    metadata:
+      labels:
+        app: ducklake-backend
+    spec:
+      containers:
+      - name: ducklake-backend
+        image: your-docker-registry/ducklake-backend:latest # Use a proper registry image
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MINIO_ENDPOINT
+          value: "minio-service.storage.svc.cluster.local:9000" # Assuming MinIO is in 'storage' namespace
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: accesskey
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secretkey
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

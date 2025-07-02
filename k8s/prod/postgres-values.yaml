@@ -1,0 +1,16 @@
+# Production PostgreSQL values - more robust configuration
+# This would typically involve replication, backups, proper storage classes, etc.
+auth:
+  username: postgres
+  password: postgrespassword
+  database: ducklakedb
+
+primary:
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: standard # Use a proper storage class
+
+replication:
+  enabled: true
+  replicaCount: 2

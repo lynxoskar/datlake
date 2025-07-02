@@ -1,0 +1,12 @@
+auth:
+  username: postgres
+  password: postgrespassword
+  database: ducklakedb
+
+primary:
+  persistence:
+    enabled: true
+    size: 10Gi
+
+service:
+  type: ClusterIP

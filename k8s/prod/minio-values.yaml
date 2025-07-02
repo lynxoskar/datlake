@@ -1,0 +1,14 @@
+# Production MinIO values - more robust configuration
+# This would typically involve distributed mode, proper storage classes, etc.
+mode: distributed
+
+accessKey: minioadmin
+secretKey: minioadmin
+
+service:
+  type: ClusterIP
+
+persistence:
+  enabled: true
+  size: 100Gi
+  storageClass: standard # Use a proper storage class

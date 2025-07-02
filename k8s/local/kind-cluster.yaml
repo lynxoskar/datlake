@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ducklake-cluster
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 30000 # NodePort for backend service
+    hostPort: 8000
+    listenAddress: "0.0.0.0"
+    protocol: TCP

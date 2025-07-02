@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ducklake-backend
+  labels:
+    app: ducklake-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ducklake-backend
+  template:
+    metadata:
+      labels:
+        app: ducklake-backend
+    spec:
+      containers:
+      - name: ducklake-backend
+        image: ducklake-backend:latest
+        imagePullPolicy: Never # Use Never for local development with locally built images
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MINIO_ENDPOINT
+          value: "minio-service.storage.svc.cluster.local:9000" # Placeholder, update with actual MinIO service
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: accesskey
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secretkey
+        # Add other environment variables as needed (e.g., PostgreSQL connection)
