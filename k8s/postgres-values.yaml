@@ -6,7 +6,262 @@ auth:
 primary:
   persistence:
     enabled: true
-    size: 10Gi
+    size: 20Gi  # Increased for PGMQ partitions and WAL
+  
+  # Resource allocation for PGMQ performance
+  resources:
+    requests:
+      memory: "3Gi"     # Support 2GB shared_buffers + overhead
+      cpu: "1000m"      # 1 CPU minimum
+    limits:
+      memory: "4Gi"     # Allow headroom for connections and operations
+      cpu: "2000m"      # 2 CPU maximum
+  
+  # PGMQ Performance-Optimized PostgreSQL Configuration
+  configuration: |
+    # =============================================================================
+    # PGMQ Message Queue Performance Configuration
+    # Optimized for high-throughput message processing workloads
+    # =============================================================================
+    
+    # PGMQ Extension Requirements (requires restart)
+    shared_preload_libraries = 'pg_partman_bgw,pg_stat_statements'
+    pg_partman_bgw.interval = 60
+    pg_partman_bgw.role = 'postgres'
+    pg_partman_bgw.dbname = 'ducklakedb'
+    
+    # =============================================================================
+    # Memory Configuration - Optimized for Message Queue Workloads
+    # =============================================================================
+    
+    # Aggressive memory allocation for queue working set
+    shared_buffers = '2GB'                    # 75% of 3GB limit (aggressive for MQ)
+    work_mem = '64MB'                         # Per operation memory
+    maintenance_work_mem = '512MB'            # Vacuum/index operations
+    effective_cache_size = '2GB'              # OS cache assumption
+    
+    # =============================================================================
+    # Connection and Process Management
+    # =============================================================================
+    
+    max_connections = 200                     # Handle concurrent queue operations
+    max_worker_processes = 16                 # Parallel operations
+    max_parallel_workers = 8                  # Query parallelism
+    max_parallel_workers_per_gather = 4       # Per-query parallel workers
+    
+    # =============================================================================
+    # I/O and Storage Optimization (SSD-optimized)
+    # =============================================================================
+    
+    random_page_cost = 1.1                    # SSD performance (down from 4.0)
+    seq_page_cost = 1.0                       # Sequential scan cost baseline
+    effective_io_concurrency = 200            # SSD concurrent I/O capability
+    
+    # =============================================================================
+    # WAL and Checkpoint Configuration - Write-Heavy Workload
+    # =============================================================================
+    
+    wal_buffers = '64MB'                      # WAL buffer size
+    checkpoint_completion_target = 0.9        # Spread checkpoint I/O
+    max_wal_size = '2GB'                      # Maximum WAL size
+    min_wal_size = '512MB'                    # Minimum WAL size
+    checkpoint_timeout = '15min'              # Checkpoint frequency
+    wal_compression = on                      # Compress WAL records
+    
+    # =============================================================================
+    # Aggressive Autovacuum - Critical for PGMQ Performance
+    # =============================================================================
+    
+    # Enable aggressive autovacuum for message queue table bloat management
+    autovacuum = on
+    autovacuum_max_workers = 6                # Scale with workload
+    autovacuum_vacuum_threshold = 25          # Vacuum after 25 dead tuples
+    autovacuum_analyze_threshold = 25         # Analyze after 25 changes
+    autovacuum_vacuum_scale_factor = 0.01     # Very aggressive (vs 0.2 default)
+    autovacuum_analyze_scale_factor = 0.005   # Very aggressive (vs 0.1 default)
+    autovacuum_vacuum_cost_limit = 2000       # Higher resource usage for vacuum
+    autovacuum_vacuum_cost_delay = '10ms'     # Faster vacuum processing
+    autovacuum_naptime = '15s'                # Check for work more frequently
+    
+    # =============================================================================
+    # Query Planning and Execution
+    # =============================================================================
+    
+    default_statistics_target = 100           # Statistics collection
+    constraint_exclusion = partition          # Optimize partition queries
+    enable_partitionwise_join = on            # Partition-aware joins
+    enable_partitionwise_aggregate = on       # Partition-aware aggregates
+    
+    # =============================================================================
+    # Logging and Monitoring - Essential for Queue Performance & Loki Integration
+    # =============================================================================
+    
+    # Structured logging for Promtail/Loki integration
+    logging_collector = on                    # Enable logging collector
+    log_destination = 'stderr'               # Log to stderr for container capture
+    log_min_duration_statement = 1000        # Log slow queries (1 second)
+    log_checkpoints = on                     # Log checkpoint activity
+    log_autovacuum_min_duration = 0          # Log all autovacuum activity
+    log_temp_files = 10MB                    # Log large temp files
+    log_connections = on                     # Log new connections
+    log_disconnections = on                  # Log disconnections
+    log_lock_waits = on                      # Log lock waits (important for PGMQ)
+    log_statement = 'ddl'                    # Log DDL statements
+    
+    # Enhanced logging format for better parsing
+    log_line_prefix = '%t [%p] %u@%d %h %x %i '  # timestamp [pid] user@db host xid cmdtag
+    log_timezone = 'UTC'                     # Use UTC for consistent timestamps
+    
+    # Monitoring and statistics
+    track_activity_query_size = 2048         # Query text size for pg_stat_activity
+    track_functions = all                    # Track function calls
+    track_io_timing = on                     # Track I/O timing for performance analysis
+    
+    # pg_stat_statements configuration
+    pg_stat_statements.max = 10000            # Track more statements
+    pg_stat_statements.track = all            # Track all statements
+    pg_stat_statements.save = on              # Persist across restarts
+    
+    # =============================================================================
+    # Lock and Timeout Configuration
+    # =============================================================================
+    
+    deadlock_timeout = '1s'                   # Deadlock detection timeout
+    lock_timeout = '30s'                      # Statement lock timeout
+    idle_in_transaction_session_timeout = '10min'  # Cleanup idle transactions
+    
+    # =============================================================================
+    # Background Writer and Checkpointer Tuning
+    # =============================================================================
+    
+    bgwriter_delay = '100ms'                  # Background writer frequency
+    bgwriter_lru_maxpages = 1000              # Pages to write per round
+    bgwriter_lru_multiplier = 10.0            # Multiplier for future rounds
+    
+    # =============================================================================
+    # Archive and Replication (if needed)
+    # =============================================================================
+    
+    wal_level = replica                       # Enable replication
+    archive_mode = off                        # Disable archiving for performance
+    
+  initdb:
+    scripts:
+      01-extensions.sql: |
+        -- Install PGMQ extension for message queuing
+        CREATE EXTENSION IF NOT EXISTS pgmq;
+        
+        -- Create schemas
+        CREATE SCHEMA IF NOT EXISTS openlineage;
+        CREATE SCHEMA IF NOT EXISTS queue;
+        
+        -- Grant permissions
+        GRANT USAGE ON SCHEMA openlineage TO postgres;
+        GRANT USAGE ON SCHEMA queue TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA queue TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA queue TO postgres;
+      
+      02-openlineage-schema.sql: |
+        -- OpenLineage schema for data lineage tracking
+        SET search_path TO openlineage;
+        
+        -- Jobs table: tracks job definitions
+        CREATE TABLE IF NOT EXISTS jobs (
+          id SERIAL PRIMARY KEY,
+          namespace VARCHAR(255) NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB,
+          UNIQUE(namespace, name)
+        );
+        
+        -- Runs table: tracks job executions
+        CREATE TABLE IF NOT EXISTS runs (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL UNIQUE,
+          job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+          state VARCHAR(50) NOT NULL DEFAULT 'RUNNING',
+          started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          ended_at TIMESTAMP WITH TIME ZONE,
+          metadata JSONB,
+          producer_uri VARCHAR(500)
+        );
+        
+        -- Datasets table: tracks data assets
+        CREATE TABLE IF NOT EXISTS datasets (
+          id SERIAL PRIMARY KEY,
+          namespace VARCHAR(255) NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          physical_name VARCHAR(500),
+          source_uri VARCHAR(500),
+          metadata JSONB,
+          UNIQUE(namespace, name)
+        );
+        
+        -- Run events table: stores OpenLineage events
+        CREATE TABLE IF NOT EXISTS run_events (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          event_type VARCHAR(50) NOT NULL,
+          event_time TIMESTAMP WITH TIME ZONE NOT NULL,
+          producer_uri VARCHAR(500),
+          schema_url VARCHAR(500),
+          event_data JSONB NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        -- Lineage graph table: tracks input/output relationships
+        CREATE TABLE IF NOT EXISTS lineage_graph (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          dataset_id INTEGER REFERENCES datasets(id) ON DELETE CASCADE,
+          direction VARCHAR(10) NOT NULL CHECK (direction IN ('INPUT', 'OUTPUT')),
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB
+        );
+        
+        -- Indexes for performance
+        CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs(run_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_job_id ON runs(job_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
+        CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+        
+        CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
+        CREATE INDEX IF NOT EXISTS idx_run_events_event_type ON run_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_run_events_event_time ON run_events(event_time);
+        
+        CREATE INDEX IF NOT EXISTS idx_lineage_graph_run_id ON lineage_graph(run_id);
+        CREATE INDEX IF NOT EXISTS idx_lineage_graph_dataset_id ON lineage_graph(dataset_id);
+        CREATE INDEX IF NOT EXISTS idx_lineage_graph_direction ON lineage_graph(direction);
+        
+        CREATE INDEX IF NOT EXISTS idx_jobs_namespace_name ON jobs(namespace, name);
+        CREATE INDEX IF NOT EXISTS idx_datasets_namespace_name ON datasets(namespace, name);
+        
+        -- Grant permissions to postgres user
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openlineage TO postgres;
+      
+      03-queue-setup.sql: |
+        -- PGMQ queue setup for OpenLineage event processing
+        
+        -- Create OpenLineage events queue
+        SELECT pgmq.create_queue('lineage_events');
+        
+        -- Create dead letter queue for failed events
+        SELECT pgmq.create_queue('lineage_events_dlq');
+        
+        -- Create queue for real-time notifications
+        SELECT pgmq.create_queue('lineage_notifications');
+        
+        -- Grant permissions on pgmq schema
+        GRANT USAGE ON SCHEMA pgmq TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA pgmq TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA pgmq TO postgres;
 
 service:
   type: ClusterIP

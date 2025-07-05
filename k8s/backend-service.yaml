@@ -11,4 +11,5 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8000
-  type: ClusterIP # Use ClusterIP for internal access, LoadBalancer for external
+      nodePort: 30000
+  type: NodePort # Use NodePort for external access via localhost:8000

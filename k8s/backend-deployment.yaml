@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: ducklake-backend
-        image: ducklake-backend:latest
+        image: ducklake-backend:v1.0.2
         imagePullPolicy: Never # Use Never for local development with locally built images
         ports:
         - containerPort: 8000
@@ -33,4 +33,22 @@ spec:
             secretKeyRef:
               name: minio-credentials
               key: secretkey
-        # Add other environment variables as needed (e.g., PostgreSQL connection)
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

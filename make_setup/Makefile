@@ -65,6 +65,16 @@ deploy-kind:
 	@kubectl --context "$(KIND_CONTEXT)" apply -f "../k8s/backend-service.yaml"
 	@echo "✅ Backend application deployed."
 
+	@echo "Deploying logging stack (Loki/Promtail)"
+	@kubectl --context "$(KIND_CONTEXT)" apply -f "../k8s/loki-deployment.yaml"
+	@kubectl --context "$(KIND_CONTEXT)" apply -f "../k8s/promtail-deployment.yaml"
+	@echo "✅ Logging stack deployed."
+
+	@echo "Setting up port forwarding for log access"
+	@kubectl --context "$(KIND_CONTEXT)" port-forward svc/loki 3100:3100 > /dev/null 2>&1 &
+	@kubectl --context "$(KIND_CONTEXT)" port-forward svc/ducklake-backend-service 8000:80 > /dev/null 2>&1 &
+	@echo "✅ Port forwarding established (Loki: 3100, Backend: 8000)"
+
 	@echo "🚀 DuckLake Kind cluster setup complete!"
 
 .PHONY: deploy-prod
@@ -94,5 +104,10 @@ deploy-prod:
 	@kubectl --context "$(PROD_CONTEXT)" apply -f "../k8s/prod/backend-deployment.yaml"
 	@kubectl --context "$(PROD_CONTEXT)" apply -f "../k8s/prod/backend-service.yaml"
 	@echo "✅ Backend application deployed."
+
+	@echo "Deploying logging stack (Loki/Promtail)"
+	@kubectl --context "$(PROD_CONTEXT)" apply -f "../k8s/loki-deployment.yaml"
+	@kubectl --context "$(PROD_CONTEXT)" apply -f "../k8s/promtail-deployment.yaml"
+	@echo "✅ Logging stack deployed."
 
 	@echo "🚀 DuckLake production deployment complete!"

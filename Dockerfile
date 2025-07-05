@@ -12,7 +12,7 @@ COPY pyproject.toml ./pyproject.toml
 COPY uv.lock ./uv.lock
 
 # Install dependencies
-RUN bash -c "uv pip install --system --no-deps -r <(uv pip freeze)"
+RUN uv sync --frozen
 
 # Copy the application code
 COPY app/ ./app/
@@ -21,4 +21,4 @@ COPY app/ ./app/
 EXPOSE 8000
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD [".venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

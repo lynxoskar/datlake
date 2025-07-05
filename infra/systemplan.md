@@ -38,7 +38,35 @@ We will use Helm for deploying these stateful services to ensure maintainability
     2. Create a `postgres-values.yaml` to configure the user, password, database name, and persistence.
     3. Deploy PostgreSQL using Helm into the `storage` namespace.
 
-### 2.3. DuckLake Service Environment
+### 2.3. Logging Infrastructure (Loki/Promtail)
+
+- **Purpose:** Unified logging solution for collecting, aggregating, and querying logs from all Kubernetes pods and services. Provides centralized log management with structured JSON logging from applications.
+- **Deployment Method:** Native Kubernetes manifests with Loki as a single-instance deployment and Promtail as a DaemonSet.
+- **Configuration:**
+    - **Loki (v2.9.0):** Log aggregation server with HTTP (3100) and gRPC (9096) endpoints
+        - BoltDB index with filesystem object store
+        - Embedded cache (100MB) for query performance
+        - Single replication factor for development/testing
+        - Resource limits: 256Mi memory, 200m CPU
+    - **Promtail (v2.9.0):** DaemonSet for automatic log collection from all pods
+        - Kubernetes service discovery for pod detection
+        - CRI pipeline for container log parsing
+        - Label mapping: namespace, pod, container, job metadata
+        - Resource limits: 128Mi memory, 100m CPU
+    - **Application Integration:** Structured JSON logging with service labels and request tracking
+    - **Query Tools:** LogCLI available for command-line log analysis
+- **Action Items:**
+    1. Deploy Loki using existing manifest: `k8s/loki-deployment.yaml`
+    2. Deploy Promtail DaemonSet using: `k8s/promtail-deployment.yaml`
+    3. **✅ PostgreSQL Log Integration**: Enhanced Promtail configuration for PostgreSQL log parsing
+    4. **✅ Log Parsing**: Structured parsing for PostgreSQL logs, PGMQ operations, and autovacuum activity
+    5. **✅ Monitoring Tools**: PostgreSQL-specific log queries and real-time monitoring dashboard
+    6. Configure persistent storage for production use (replace emptyDir volumes)
+    7. Integrate Grafana dashboards for log visualization
+    8. Implement log retention policies and S3-compatible storage backend
+    9. Add alerting rules for critical log events
+
+### 2.4. DuckLake Service Environment
 
 - **Purpose:** This is the runtime environment for our custom Python backend. It's not for deploying DuckDB itself, but for running our application that *uses* the DuckDB library.
 - **Deployment Method:** A standard Kubernetes `Deployment` and `Service`.

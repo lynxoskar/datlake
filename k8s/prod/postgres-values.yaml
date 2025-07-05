@@ -1,5 +1,3 @@
-# Production PostgreSQL values - more robust configuration
-# This would typically involve replication, backups, proper storage classes, etc.
 auth:
   username: postgres
   password: postgrespassword
@@ -8,9 +6,360 @@ auth:
 primary:
   persistence:
     enabled: true
-    size: 50Gi
-    storageClass: standard # Use a proper storage class
+    size: 100Gi  # Production storage for PGMQ partitions and WAL
+    storageClass: "fast-ssd"  # Use high-performance storage class
+  
+  # Production resource allocation for PGMQ performance
+  resources:
+    requests:
+      memory: "8Gi"     # Support aggressive shared_buffers + overhead
+      cpu: "2000m"      # 2 CPU minimum
+    limits:
+      memory: "16Gi"    # Large memory pool for high-throughput
+      cpu: "8000m"      # 8 CPU maximum for production workloads
+  
+  # PGMQ Production Performance-Optimized PostgreSQL Configuration
+  configuration: |
+    # =============================================================================
+    # PGMQ Production Message Queue Performance Configuration
+    # Optimized for high-throughput message processing workloads
+    # Target: 30,000+ messages/second capability
+    # =============================================================================
+    
+    # PGMQ Extension Requirements (requires restart)
+    shared_preload_libraries = 'pg_partman_bgw,pg_stat_statements,auto_explain'
+    pg_partman_bgw.interval = 60
+    pg_partman_bgw.role = 'postgres'
+    pg_partman_bgw.dbname = 'ducklakedb'
+    
+    # =============================================================================
+    # Memory Configuration - Production Message Queue Workloads
+    # =============================================================================
+    
+    # Aggressive memory allocation for queue working set (75% strategy)
+    shared_buffers = '12GB'                   # 75% of 16GB limit (aggressive for MQ)
+    work_mem = '128MB'                        # Per operation memory (higher for prod)
+    maintenance_work_mem = '2GB'              # Large vacuum/index operations
+    effective_cache_size = '12GB'             # OS cache assumption
+    temp_buffers = '32MB'                     # Temporary table buffers
+    
+    # =============================================================================
+    # Connection and Process Management - Production Scale
+    # =============================================================================
+    
+    max_connections = 400                     # Handle high concurrent queue operations
+    max_worker_processes = 32                 # Parallel operations (4x CPU)
+    max_parallel_workers = 16                 # Query parallelism (2x CPU)
+    max_parallel_workers_per_gather = 8       # Per-query parallel workers
+    max_parallel_maintenance_workers = 8      # Maintenance parallelism
+    
+    # =============================================================================
+    # I/O and Storage Optimization (High-Performance SSD)
+    # =============================================================================
+    
+    random_page_cost = 1.0                    # High-performance SSD
+    seq_page_cost = 1.0                       # Sequential scan cost baseline
+    effective_io_concurrency = 1000           # High-end SSD concurrent I/O capability
+    maintenance_io_concurrency = 100          # Maintenance operation I/O
+    
+    # =============================================================================
+    # WAL and Checkpoint Configuration - High Write Workload
+    # =============================================================================
+    
+    wal_buffers = '256MB'                     # Large WAL buffer size
+    checkpoint_completion_target = 0.9        # Spread checkpoint I/O
+    max_wal_size = '8GB'                      # Large maximum WAL size
+    min_wal_size = '2GB'                      # Large minimum WAL size
+    checkpoint_timeout = '10min'              # More frequent checkpoints
+    wal_compression = on                      # Compress WAL records
+    synchronous_commit = off                  # Async commit for performance
+    
+    # =============================================================================
+    # Ultra-Aggressive Autovacuum - Critical for Production PGMQ
+    # =============================================================================
+    
+    # Enable ultra-aggressive autovacuum for message queue table bloat management
+    autovacuum = on
+    autovacuum_max_workers = 12               # Scale with high workload
+    autovacuum_vacuum_threshold = 10          # Vacuum after 10 dead tuples
+    autovacuum_analyze_threshold = 10         # Analyze after 10 changes
+    autovacuum_vacuum_scale_factor = 0.005    # Ultra aggressive (vs 0.2 default)
+    autovacuum_analyze_scale_factor = 0.002   # Ultra aggressive (vs 0.1 default)
+    autovacuum_vacuum_cost_limit = 5000       # Very high resource usage for vacuum
+    autovacuum_vacuum_cost_delay = '5ms'      # Very fast vacuum processing
+    autovacuum_naptime = '10s'                # Check for work very frequently
+    autovacuum_work_mem = '1GB'               # Large memory for autovacuum
+    
+    # =============================================================================
+    # Query Planning and Execution - Production Tuning
+    # =============================================================================
+    
+    default_statistics_target = 500           # High statistics collection
+    constraint_exclusion = partition          # Optimize partition queries
+    enable_partitionwise_join = on            # Partition-aware joins
+    enable_partitionwise_aggregate = on       # Partition-aware aggregates
+    jit = on                                  # Enable JIT compilation
+    jit_above_cost = 100000                   # JIT threshold
+    
+    # =============================================================================
+    # Advanced Logging and Monitoring - Production Observability & Loki Integration
+    # =============================================================================
+    
+    # Production structured logging for Promtail/Loki integration
+    logging_collector = on                    # Enable logging collector
+    log_destination = 'stderr'               # Log to stderr for container capture
+    log_min_duration_statement = 500         # Log queries > 500ms
+    log_checkpoints = on                     # Log checkpoint activity
+    log_autovacuum_min_duration = 0          # Log all autovacuum activity
+    log_temp_files = 10MB                    # Log large temp files
+    log_connections = on                     # Log new connections (production monitoring)
+    log_disconnections = on                  # Log disconnections (production monitoring)
+    log_lock_waits = on                      # Log lock waits (critical for PGMQ)
+    log_statement = 'ddl'                    # Log DDL statements
+    log_error_verbosity = verbose            # Detailed error information
+    
+    # Enhanced production logging format for better parsing and troubleshooting
+    log_line_prefix = '%t [%p] %u@%d %h %x %i %e '  # timestamp [pid] user@db host xid cmdtag sqlstate
+    log_timezone = 'UTC'                     # Use UTC for consistent timestamps
+    
+    # Advanced monitoring and statistics for production
+    track_activity_query_size = 4096         # Larger query text for monitoring
+    track_functions = all                    # Track function calls
+    track_io_timing = on                     # Track I/O timing for performance analysis
+    track_wal_io_timing = on                 # Track WAL I/O timing (PostgreSQL 14+)
+    
+    # pg_stat_statements configuration - Production monitoring
+    pg_stat_statements.max = 50000            # Track many more statements
+    pg_stat_statements.track = all            # Track all statements
+    pg_stat_statements.save = on              # Persist across restarts
+    pg_stat_statements.track_utility = on     # Track utility statements
+    
+    # auto_explain for production debugging
+    auto_explain.log_min_duration = '1s'      # Explain slow queries
+    auto_explain.log_analyze = on             # Include actual row counts
+    auto_explain.log_buffers = on             # Include buffer usage
+    auto_explain.log_timing = on              # Include timing info
+    
+    # =============================================================================
+    # Lock and Timeout Configuration - Production Reliability
+    # =============================================================================
+    
+    deadlock_timeout = '500ms'                # Fast deadlock detection
+    lock_timeout = '10s'                      # Short statement lock timeout
+    idle_in_transaction_session_timeout = '5min'  # Cleanup idle transactions faster
+    statement_timeout = '10min'               # Prevent runaway queries
+    
+    # =============================================================================
+    # Background Writer and Checkpointer Tuning - High Performance
+    # =============================================================================
+    
+    bgwriter_delay = '50ms'                   # Frequent background writer
+    bgwriter_lru_maxpages = 2000              # More pages to write per round
+    bgwriter_lru_multiplier = 20.0            # Higher multiplier for future rounds
+    bgwriter_flush_after = 2MB               # Flush after writing 2MB
+    
+    # =============================================================================
+    # Archive and Replication - Production Features
+    # =============================================================================
+    
+    wal_level = replica                       # Enable replication
+    archive_mode = on                         # Enable archiving for backup
+    archive_command = 'test ! -f /backup/archive/%f && cp %p /backup/archive/%f'
+    hot_standby = on                          # Enable hot standby reads
+    
+    # =============================================================================
+    # Additional Production Performance Settings
+    # =============================================================================
+    
+    huge_pages = try                          # Use huge pages if available
+    shared_memory_type = mmap                 # Use mmap for shared memory
+    dynamic_shared_memory_type = posix        # POSIX shared memory
+    
+    # Connection and SSL
+    ssl = off                                 # Disable SSL for performance (use TLS termination)
+    tcp_keepalives_idle = 600                 # TCP keepalive
+    tcp_keepalives_interval = 30              # TCP keepalive interval
+    tcp_keepalives_count = 3                  # TCP keepalive count
 
+  initdb:
+    scripts:
+      01-extensions.sql: |
+        -- Install PGMQ extension for message queuing
+        CREATE EXTENSION IF NOT EXISTS pgmq;
+        
+        -- Create schemas
+        CREATE SCHEMA IF NOT EXISTS openlineage;
+        CREATE SCHEMA IF NOT EXISTS queue;
+        
+        -- Grant permissions
+        GRANT USAGE ON SCHEMA openlineage TO postgres;
+        GRANT USAGE ON SCHEMA queue TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA queue TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA queue TO postgres;
+      
+      02-openlineage-schema.sql: |
+        -- OpenLineage schema for data lineage tracking
+        SET search_path TO openlineage;
+        
+        -- Jobs table: tracks job definitions
+        CREATE TABLE IF NOT EXISTS jobs (
+          id SERIAL PRIMARY KEY,
+          namespace VARCHAR(255) NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB,
+          UNIQUE(namespace, name)
+        );
+        
+        -- Runs table: tracks job executions
+        CREATE TABLE IF NOT EXISTS runs (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL UNIQUE,
+          job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+          state VARCHAR(50) NOT NULL DEFAULT 'RUNNING',
+          started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          ended_at TIMESTAMP WITH TIME ZONE,
+          metadata JSONB,
+          producer_uri VARCHAR(500)
+        );
+        
+        -- Datasets table: tracks data assets
+        CREATE TABLE IF NOT EXISTS datasets (
+          id SERIAL PRIMARY KEY,
+          namespace VARCHAR(255) NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          physical_name VARCHAR(500),
+          source_uri VARCHAR(500),
+          metadata JSONB,
+          UNIQUE(namespace, name)
+        );
+        
+        -- Run events table: stores OpenLineage events
+        CREATE TABLE IF NOT EXISTS run_events (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          event_type VARCHAR(50) NOT NULL,
+          event_time TIMESTAMP WITH TIME ZONE NOT NULL,
+          producer_uri VARCHAR(500),
+          schema_url VARCHAR(500),
+          event_data JSONB NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        -- Lineage graph table: tracks input/output relationships
+        CREATE TABLE IF NOT EXISTS lineage_graph (
+          id SERIAL PRIMARY KEY,
+          run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+          dataset_id INTEGER REFERENCES datasets(id) ON DELETE CASCADE,
+          direction VARCHAR(10) NOT NULL CHECK (direction IN ('INPUT', 'OUTPUT')),
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          metadata JSONB
+        );
+        
+        -- Production-optimized indexes for high-performance queries
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_run_id ON runs(run_id);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_job_id ON runs(job_id);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_state ON runs(state);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+        
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_events_event_type ON run_events(event_type);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_events_event_time ON run_events(event_time);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_events_created_at ON run_events(created_at);
+        
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lineage_graph_run_id ON lineage_graph(run_id);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lineage_graph_dataset_id ON lineage_graph(dataset_id);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lineage_graph_direction ON lineage_graph(direction);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lineage_graph_created_at ON lineage_graph(created_at);
+        
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_namespace_name ON jobs(namespace, name);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_datasets_namespace_name ON datasets(namespace, name);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_datasets_updated_at ON datasets(updated_at);
+        
+        -- JSONB indexes for metadata queries
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_metadata_gin ON jobs USING GIN(metadata);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_metadata_gin ON runs USING GIN(metadata);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_datasets_metadata_gin ON datasets USING GIN(metadata);
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_events_data_gin ON run_events USING GIN(event_data);
+        
+        -- Grant permissions to postgres user
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openlineage TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openlineage TO postgres;
+      
+      03-queue-setup.sql: |
+        -- PGMQ queue setup for OpenLineage event processing
+        
+        -- Create OpenLineage events queue with retention
+        SELECT pgmq.create_queue('lineage_events');
+        SELECT pgmq.set_queue_retention('lineage_events', interval '7 days');
+        
+        -- Create dead letter queue for failed events
+        SELECT pgmq.create_queue('lineage_events_dlq');
+        SELECT pgmq.set_queue_retention('lineage_events_dlq', interval '30 days');
+        
+        -- Create queue for real-time notifications
+        SELECT pgmq.create_queue('lineage_notifications');
+        SELECT pgmq.set_queue_retention('lineage_notifications', interval '1 day');
+        
+        -- Grant permissions on pgmq schema
+        GRANT USAGE ON SCHEMA pgmq TO postgres;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA pgmq TO postgres;
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA pgmq TO postgres;
+      
+      04-performance-tuning.sql: |
+        -- Production performance tuning for PGMQ tables
+        
+        -- Set aggressive autovacuum on PGMQ queue tables
+        DO $$
+        DECLARE
+            queue_name text;
+        BEGIN
+            FOR queue_name IN SELECT name FROM pgmq.list_queues()
+            LOOP
+                EXECUTE format('ALTER TABLE pgmq.q_%s SET (
+                    autovacuum_vacuum_scale_factor = 0.001,
+                    autovacuum_analyze_scale_factor = 0.0005,
+                    autovacuum_vacuum_threshold = 5,
+                    autovacuum_analyze_threshold = 5,
+                    autovacuum_vacuum_cost_limit = 10000
+                )', queue_name);
+            END LOOP;
+        END
+        $$;
+        
+        -- Optimize OpenLineage tables for high-throughput
+        ALTER TABLE openlineage.run_events SET (
+            autovacuum_vacuum_scale_factor = 0.01,
+            autovacuum_analyze_scale_factor = 0.005,
+            autovacuum_vacuum_threshold = 10,
+            fillfactor = 90
+        );
+        
+        ALTER TABLE openlineage.lineage_graph SET (
+            autovacuum_vacuum_scale_factor = 0.01,
+            autovacuum_analyze_scale_factor = 0.005,
+            fillfactor = 90
+        );
+
+# Production replication configuration
 replication:
   enabled: true
   replicaCount: 2
+  
+  readReplicas:
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "1000m"
+      limits:
+        memory: "8Gi"
+        cpu: "4000m"
+
+service:
+  type: ClusterIP
