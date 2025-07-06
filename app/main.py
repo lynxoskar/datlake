@@ -95,16 +95,17 @@ async def shutdown_event() -> None:
 # Initialize DuckDB in-memory database
 con = duckdb.connect(database=':memory:', read_only=False)
 
-# Initialize MinIO client
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+# Get application settings
+from .config import get_settings
+settings = get_settings()
 
+# Initialize MinIO client using centralized configuration
 s3_client = boto3.client(
     's3',
-    endpoint_url=f"http://{MINIO_ENDPOINT}",
-    aws_access_key_id=MINIO_ACCESS_KEY,
-    aws_secret_access_key=MINIO_SECRET_KEY,
+    endpoint_url=f"{'https' if settings.storage.minio_secure else 'http'}://{settings.storage.minio_endpoint}",
+    aws_access_key_id=settings.storage.minio_access_key,
+    aws_secret_access_key=settings.storage.minio_secret_key.get_secret_value(),
+    region_name=settings.storage.minio_region,
     config=boto3.session.Config(signature_version='s3v4')
 )
 
@@ -214,6 +215,64 @@ def force_garbage_collection() -> Dict[str, Any]:
     except Exception as e:
         log_event("ERROR", "Failed to force garbage collection", error=str(e))
         raise HTTPException(status_code=500, detail=f"Error forcing garbage collection: {e}")
+
+
+# Configuration endpoints
+@app.get("/config/summary")
+def get_config_summary() -> Dict[str, Any]:
+    """Get configuration summary (without secrets)."""
+    try:
+        return settings.get_config_summary()
+    except Exception as e:
+        log_event("ERROR", "Failed to get configuration summary", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting configuration: {e}")
+
+
+@app.get("/config/validate")
+def validate_config() -> Dict[str, Any]:
+    """Validate current configuration."""
+    try:
+        from .config import validate_configuration
+        return validate_configuration()
+    except Exception as e:
+        log_event("ERROR", "Failed to validate configuration", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error validating configuration: {e}")
+
+
+@app.get("/config/features")
+def get_feature_flags() -> Dict[str, bool]:
+    """Get current feature flag status."""
+    try:
+        return {
+            attr: getattr(settings.features, attr)
+            for attr in dir(settings.features)
+            if not attr.startswith('_') and isinstance(getattr(settings.features, attr), bool)
+        }
+    except Exception as e:
+        log_event("ERROR", "Failed to get feature flags", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting feature flags: {e}")
+
+
+@app.get("/config/health")
+async def get_config_health() -> Dict[str, Any]:
+    """Get comprehensive configuration health check."""
+    try:
+        from .config_monitor import config_monitor
+        return await config_monitor.perform_comprehensive_health_check()
+    except Exception as e:
+        log_event("ERROR", "Failed to perform configuration health check", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error performing health check: {e}")
+
+
+@app.get("/config/health/last")
+def get_last_config_health() -> Dict[str, Any]:
+    """Get last configuration health check results."""
+    try:
+        from .config_monitor import config_monitor
+        return config_monitor.get_last_health_status()
+    except Exception as e:
+        log_event("ERROR", "Failed to get last health check", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting last health check: {e}")
 
 # DuckDB table operations
 @app.post("/tables")

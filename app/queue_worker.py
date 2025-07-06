@@ -26,13 +26,15 @@ class QueueWorker:
     async def initialize(self) -> None:
         """Initialize database connection pool"""
         self.db_pool = await asyncpg.create_pool(
-            host=settings.postgres_host,
-            port=settings.postgres_port,
-            database=settings.postgres_db,
-            user=settings.postgres_user,
-            password=settings.postgres_password,
-            min_size=1,
-            max_size=5
+            host=settings.database.postgres_host,
+            port=settings.database.postgres_port,
+            database=settings.database.postgres_db,
+            user=settings.database.postgres_user,
+            password=settings.database.postgres_password.get_secret_value(),
+            min_size=max(1, settings.database.postgres_min_connections // 2),  # Use fewer connections for worker
+            max_size=max(5, settings.database.postgres_max_connections // 2),
+            command_timeout=settings.database.postgres_command_timeout,
+            server_settings={'application_name': 'ducklake-worker'}
         )
         
         # Initialize lineage manager
@@ -86,8 +88,8 @@ class QueueWorker:
                     # Read messages from queue
                     rows = await conn.fetch(
                         "SELECT msg_id, message FROM pgmq.read('lineage_events', $1, $2)",
-                        settings.queue_batch_size,
-                        settings.queue_poll_interval
+                        settings.queue.queue_batch_size,
+                        settings.queue.queue_poll_interval
                     )
                     
                     for row in rows:
@@ -144,7 +146,7 @@ class QueueWorker:
                     # Read notification messages
                     rows = await conn.fetch(
                         "SELECT msg_id, message FROM pgmq.read('lineage_notifications', $1, $2)",
-                        settings.queue_batch_size,
+                        settings.queue.queue_batch_size,
                         1  # Shorter poll interval for notifications
                     )
                     

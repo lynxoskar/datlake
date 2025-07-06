@@ -48,23 +48,25 @@ class LineageManager:
     
     def __init__(self) -> None:
         self.client = OpenLineageClient(
-            url=settings.openlineage_url,
-            api_key=settings.openlineage_api_key
+            url=str(settings.monitoring.openlineage_url) if settings.monitoring.openlineage_url else None,
+            api_key=settings.monitoring.openlineage_api_key.get_secret_value() if settings.monitoring.openlineage_api_key else None
         )
         self.producer_uri = "ducklake-backend"
-        self.namespace = "ducklake"
+        self.namespace = settings.monitoring.openlineage_namespace
         self.db_pool: Optional[asyncpg.Pool] = None
     
     async def initialize(self) -> None:
         """Initialize database connection pool"""
         self.db_pool = await asyncpg.create_pool(
-            host=settings.postgres_host,
-            port=settings.postgres_port,
-            database=settings.postgres_db,
-            user=settings.postgres_user,
-            password=settings.postgres_password,
-            min_size=2,
-            max_size=10
+            host=settings.database.postgres_host,
+            port=settings.database.postgres_port,
+            database=settings.database.postgres_db,
+            user=settings.database.postgres_user,
+            password=settings.database.postgres_password.get_secret_value(),
+            min_size=settings.database.postgres_min_connections,
+            max_size=settings.database.postgres_max_connections,
+            command_timeout=settings.database.postgres_command_timeout,
+            server_settings={'application_name': 'ducklake-lineage'}
         )
     
     async def close(self) -> None:
