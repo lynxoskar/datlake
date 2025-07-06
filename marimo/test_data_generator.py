@@ -1,22 +1,21 @@
 import marimo as mo
-import pandas as pd
+import polars as pl
 import numpy as np
 from datetime import datetime, timedelta
 import pyarrow as pa
 import pyarrow.parquet as pq
 import io
 import requests
+import os
 
-def generate_instrument_data(instrument_name, start_time, num_minutes):
+def generate_instrument_data(instrument_name: str, start_time: datetime, num_minutes: int) -> pl.DataFrame:
+    """Generate time-series data for an instrument using Polars for optimal performance."""
     data = []
     current_time = start_time
+    open_price = 100.0  # Initial price
+    
     for i in range(num_minutes):
         # Simulate price movements
-        if i == 0:
-            open_price = 100.0
-        else:
-            open_price = data[-1]["close"]
-
         high_price = open_price + np.random.uniform(0, 1)
         low_price = open_price - np.random.uniform(0, 1)
         close_price = open_price + np.random.uniform(-0.5, 0.5)
@@ -30,8 +29,13 @@ def generate_instrument_data(instrument_name, start_time, num_minutes):
             "close": round(close_price, 2),
             "datetime": current_time.strftime("%Y-%m-%d %H:%M:%S")
         })
+        
+        # Use close price as next open price for realistic price movement
+        open_price = close_price
         current_time += timedelta(minutes=1)
-    return pd.DataFrame(data)
+    
+    # Create Polars DataFrame for better performance
+    return pl.DataFrame(data)
 
 # --- Marimo UI Elements ---
 
@@ -48,15 +52,20 @@ Number of Days: {num_days}
 """)
 
 @mo.action
-def generate_data():
-    all_data = pd.DataFrame()
+def generate_data() -> pl.DataFrame:
+    """Generate time-series data for multiple instruments using Polars for optimal performance."""
     start_time = datetime(2025, 1, 1, 9, 0, 0) # Start from Jan 1, 2025, 09:00:00
     total_minutes = num_days.value * 1440 # 1440 minutes in a day
-
+    
+    # Generate data for each instrument
+    instrument_dataframes = []
     for i in range(num_instruments.value):
         instrument_name = f"INSTRUMENT_{i+1}"
         df = generate_instrument_data(instrument_name, start_time, total_minutes)
-        all_data = pd.concat([all_data, df], ignore_index=True)
+        instrument_dataframes.append(df)
+    
+    # Efficiently concatenate all dataframes using Polars
+    all_data = pl.concat(instrument_dataframes, how="vertical")
     
     mo.output.clear()
     mo.md(f"""
@@ -72,27 +81,28 @@ mo.ui.button(label="Generate Data", on_click=generate_data)
 
 # Add a button to save data to Parquet
 @mo.action
-def save_data_to_parquet(data: pd.DataFrame):
+def save_data_to_parquet(data: pl.DataFrame):
+    """Save Polars DataFrame to Parquet using zero-copy PyArrow conversion."""
     if data is not None:
         file_path = "generated_data.parquet"
-        table = pa.Table.from_pandas(data)
-        pq.write_table(table, file_path)
+        # Use Polars' built-in Parquet writer for optimal performance
+        data.write_parquet(file_path, compression="zstd")
         mo.md(f"Data saved to `{file_path}`")
 
 mo.ui.button(label="Save Data to Parquet", on_click=lambda: save_data_to_parquet(generate_data()))
 
 # Add a button to upload data to MinIO via backend API
 @mo.action
-def upload_data_to_minio(data: pd.DataFrame, bucket_name: str, object_name: str):
+def upload_data_to_minio(data: pl.DataFrame, bucket_name: str, object_name: str):
+    """Upload Polars DataFrame to MinIO using zero-copy PyArrow conversion."""
     if data is not None:
-        # Convert DataFrame to Parquet in-memory
-        table = pa.Table.from_pandas(data)
+        # Convert DataFrame to Parquet in-memory using zero-copy PyArrow
         buffer = io.BytesIO()
-        pq.write_table(table, buffer)
+        data.write_parquet(buffer, compression="zstd")
         parquet_bytes = buffer.getvalue()
 
         # Make a POST request to the backend API
-        backend_url = "http://localhost:8000"
+        backend_url = os.getenv("BACKEND_URL", "http://backend-service:8000")
         upload_url = f"{backend_url}/datasets/{bucket_name}/{object_name}"
 
         try:

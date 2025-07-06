@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Response
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def log_event(level: str, message: str, **kwargs):
+def log_event(level: str, message: str, **kwargs: Any) -> None:
     """Log structured events in JSON format"""
     log_entry = {
         "timestamp": datetime.utcnow().isoformat(),
@@ -116,7 +116,8 @@ class JobRunComplete(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 @app.get("/")
-def read_root():
+def read_root() -> Dict[str, str]:
+    """Root endpoint for API health check."""
     request_id = str(uuid.uuid4())
     log_event("INFO", "Root endpoint accessed", request_id=request_id, endpoint="/")
     return {"Hello": "World", "request_id": request_id}
@@ -135,7 +136,8 @@ def health_check():
 
 # DuckDB table operations
 @app.post("/tables")
-def create_table(table: Table):
+def create_table(table: Table) -> Dict[str, str]:
+    """Create a new DuckDB table with specified schema."""
     request_id = str(uuid.uuid4())
     log_event("INFO", "Creating table", request_id=request_id, table_name=table.name, schema=table.schema)
     try:
@@ -150,12 +152,17 @@ def create_table(table: Table):
 
 # DuckDB query operations
 @app.put("/tables/{table_name}")
-def append_to_table(table_name: str, data: TableData):
+def append_to_table(table_name: str, data: TableData) -> Dict[str, str]:
+    """Append data to DuckDB table using direct PyArrow transfer for optimal performance."""
     try:
-        # Convert list of dicts to PyArrow Table, then to Pandas DataFrame for append
-        table = pa.Table.from_pylist(data.rows)
-        df = table.to_pandas()
-        con.append(table_name, df)
+        # Convert list of dicts to PyArrow Table for zero-copy transfer
+        arrow_table = pa.Table.from_pylist(data.rows)
+        
+        # Use DuckDB's native Arrow support for zero-copy append
+        con.register("temp_data", arrow_table)
+        con.execute(f"INSERT INTO {table_name} SELECT * FROM temp_data")
+        con.unregister("temp_data")
+        
         return {"message": f"Data appended to table '{table_name}' successfully."}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error appending data: {e}")

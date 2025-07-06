@@ -1,0 +1,314 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import cyberpunk fonts */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {
+  /* Synthwave color variables */
+  --background: #1a0b2e;
+  --foreground: #00f5ff;
+  --primary: #ff006e;
+  --secondary: #00f5ff;
+  --accent: #39ff14;
+  --muted: #240046;
+  
+  /* Terminal effects */
+  --scan-line-color: rgba(0, 245, 255, 0.1);
+  --flicker-intensity: 0.98;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: linear-gradient(135deg, #1a0b2e 0%, #240046 50%, #16213e 100%);
+  color: var(--foreground);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Terminal scan line effect */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00f5ff, transparent);
+  opacity: 0.3;
+  animation: scan-line 3s linear infinite;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+/* Terminal flicker effect */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 245, 255, 0.03) 2px,
+    rgba(0, 245, 255, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 1000;
+  animation: flicker 0.15s infinite linear alternate;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(36, 0, 70, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #ff006e, #00f5ff);
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(0, 245, 255, 0.5);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  box-shadow: 0 0 20px rgba(0, 245, 255, 0.8);
+}
+
+/* Text selection */
+::selection {
+  background: rgba(0, 245, 255, 0.3);
+  color: #ffffff;
+  text-shadow: 0 0 10px #00f5ff;
+}
+
+/* Headings with neon glow */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Orbitron', 'Exo 2', sans-serif;
+  color: #00f5ff;
+  text-shadow: 0 0 10px currentColor;
+  letter-spacing: 0.05em;
+}
+
+h1 {
+  font-size: 2.5rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  animation: pulse-neon 3s ease-in-out infinite;
+}
+
+h2 {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+/* Links with hover effects */
+a {
+  color: #ff006e;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  text-shadow: 0 0 5px currentColor;
+}
+
+a:hover {
+  color: #00f5ff;
+  text-shadow: 0 0 15px currentColor;
+  text-decoration: underline;
+}
+
+/* Form elements */
+input, textarea, select {
+  background: rgba(36, 0, 70, 0.8);
+  border: 1px solid #00f5ff;
+  color: #00f5ff;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 0.75rem;
+  border-radius: 4px;
+  box-shadow: inset 0 0 10px rgba(0, 245, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #ff006e;
+  box-shadow: 
+    inset 0 0 10px rgba(255, 0, 110, 0.2),
+    0 0 20px rgba(255, 0, 110, 0.3);
+  text-shadow: 0 0 5px #ff006e;
+}
+
+input::placeholder, textarea::placeholder {
+  color: rgba(0, 245, 255, 0.5);
+}
+
+/* Buttons */
+button {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease;
+}
+
+/* Card effects */
+.synthwave-card {
+  background: rgba(36, 0, 70, 0.6);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  backdrop-filter: blur(10px);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.synthwave-card:hover {
+  border-color: rgba(0, 245, 255, 0.6);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(0, 245, 255, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+/* Terminal/CLI specific styles */
+.terminal {
+  background: rgba(10, 10, 15, 0.9);
+  border: 1px solid #00f5ff;
+  box-shadow: 
+    0 0 20px rgba(0, 245, 255, 0.3),
+    inset 0 0 20px rgba(0, 245, 255, 0.05);
+  font-family: 'JetBrains Mono', monospace;
+  color: #39ff14;
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(57, 255, 20, 0.03) 2px,
+    rgba(57, 255, 20, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.terminal-content {
+  position: relative;
+  z-index: 2;
+}
+
+/* Status indicators */
+.status-online {
+  color: #39ff14;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.status-warning {
+  color: #ffff00;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.status-error {
+  color: #ff006e;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.status-offline {
+  color: #7209b7;
+  text-shadow: 0 0 10px currentColor;
+}
+
+/* Grid pattern overlay */
+.grid-overlay {
+  background-image: 
+    linear-gradient(rgba(0, 245, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 245, 255, 0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Neon text utilities */
+.text-neon-cyan {
+  color: #00f5ff;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.text-neon-pink {
+  color: #ff006e;
+  text-shadow: 0 0 10px currentColor;
+}
+
+.text-neon-green {
+  color: #39ff14;
+  text-shadow: 0 0 10px currentColor;
+}
+
+/* Glitch effects */
+@keyframes glitch {
+  0% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(-2px, -2px); }
+  60% { transform: translate(2px, 2px); }
+  80% { transform: translate(2px, -2px); }
+  100% { transform: translate(0); }
+}
+
+.glitch {
+  animation: glitch 0.5s infinite;
+}
+
+/* Loading animations */
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(0, 245, 255, 0.3); }
+  50% { border-color: rgba(0, 245, 255, 0.8); }
+}
+
+.loading-border {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+  }
+  
+  h1 {
+    font-size: 2rem;
+  }
+  
+  h2 {
+    font-size: 1.5rem;
+  }
+  
+  .synthwave-card {
+    backdrop-filter: blur(5px);
+  }
+}

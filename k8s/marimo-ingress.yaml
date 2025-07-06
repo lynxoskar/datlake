@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: marimo-ingress
+  labels:
+    app: marimo
+    component: notebook
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # For development, you can use cert-manager for automatic SSL
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: marimo.your-domain.com  # Replace with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: marimo-service
+            port:
+              number: 2718
+  # Uncomment for SSL with cert-manager
+  # tls:
+  # - hosts:
+  #   - marimo.your-domain.com
+  #   secretName: marimo-tls 
