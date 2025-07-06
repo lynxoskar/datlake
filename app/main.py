@@ -8,36 +8,57 @@ import boto3
 from botocore.exceptions import ClientError
 import io
 import os
-import logging
-import json
+import orjson
 import uuid
 from datetime import datetime
 from uuid import UUID
+from loguru import logger
 
 from .lineage import lineage_manager
 from .queue_worker import queue_worker
 from .routers.lineage import router as lineage_router
+from .instrumentation import memory_monitor, performance_monitor, setup_memory_monitoring, setup_performance_monitoring
+from .instrumentation.performance import PerformanceMiddleware
 
-# Configure structured logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s',
-    handlers=[logging.StreamHandler()]
+# Configure loguru for structured logging
+logger.configure(
+    handlers=[
+        {
+            "sink": "sys.stdout",
+            "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            "serialize": True,  # JSON output
+            "level": "INFO"
+        }
+    ]
 )
-logger = logging.getLogger(__name__)
 
 def log_event(level: str, message: str, **kwargs: Any) -> None:
-    """Log structured events in JSON format"""
-    log_entry = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "level": level,
+    """Log structured events using loguru with orjson serialization"""
+    log_data = {
         "service": "ducklake-backend",
         "message": message,
         **kwargs
     }
-    logger.info(json.dumps(log_entry))
+    
+    if level.upper() == "DEBUG":
+        logger.debug(message, **log_data)
+    elif level.upper() == "INFO":
+        logger.info(message, **log_data)
+    elif level.upper() == "WARNING":
+        logger.warning(message, **log_data)
+    elif level.upper() == "ERROR":
+        logger.error(message, **log_data)
+    else:
+        logger.info(message, **log_data)
 
 app = FastAPI(title="DuckLake API", description="Data lake with OpenLineage integration", version="1.0.2")
+
+# Setup instrumentation
+setup_memory_monitoring()
+setup_performance_monitoring()
+
+# Add performance monitoring middleware
+app.add_middleware(PerformanceMiddleware, performance_monitor=performance_monitor)
 
 # Include lineage router
 app.include_router(lineage_router)
@@ -123,16 +144,76 @@ def read_root() -> Dict[str, str]:
     return {"Hello": "World", "request_id": request_id}
 
 @app.get("/health")
-def health_check():
+def health_check() -> Dict[str, Any]:
+    """Comprehensive health check including database and memory status."""
     request_id = str(uuid.uuid4())
     try:
         # Test DuckDB connection
         con.execute("SELECT 1").fetchone()
-        log_event("INFO", "Health check passed", request_id=request_id, database_status="ok")
-        return {"status": "healthy", "database": "ok", "request_id": request_id}
+        
+        # Get memory info
+        memory_info = memory_monitor.get_memory_info()
+        
+        # Get performance stats
+        performance_stats = performance_monitor.get_performance_stats()
+        
+        health_data = {
+            "status": "healthy",
+            "database": "ok",
+            "memory": {
+                "rss_mb": memory_info["current"]["rss_mb"],
+                "percent": memory_info["current"]["percent"]
+            },
+            "performance": {
+                "active_requests": performance_stats.get("active_requests", 0)
+            },
+            "request_id": request_id
+        }
+        
+        log_event("INFO", "Health check passed", request_id=request_id, **health_data)
+        return health_data
     except Exception as e:
         log_event("ERROR", "Health check failed", request_id=request_id, error=str(e))
         raise HTTPException(status_code=503, detail=f"Database connection failed: {e}")
+
+
+@app.get("/metrics/memory")
+def get_memory_metrics() -> Dict[str, Any]:
+    """Get detailed memory usage metrics."""
+    try:
+        return memory_monitor.get_memory_info()
+    except Exception as e:
+        log_event("ERROR", "Failed to get memory metrics", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting memory metrics: {e}")
+
+
+@app.get("/metrics/performance")
+def get_performance_metrics() -> Dict[str, Any]:
+    """Get detailed performance metrics."""
+    try:
+        return performance_monitor.get_performance_stats()
+    except Exception as e:
+        log_event("ERROR", "Failed to get performance metrics", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting performance metrics: {e}")
+
+
+@app.post("/metrics/gc")
+def force_garbage_collection() -> Dict[str, Any]:
+    """Force garbage collection and return statistics."""
+    try:
+        collected = memory_monitor.force_garbage_collection()
+        memory_info = memory_monitor.get_memory_info()
+        
+        result = {
+            "collected_objects": collected,
+            "memory_after_gc": memory_info["current"]
+        }
+        
+        log_event("INFO", "Forced garbage collection", **result)
+        return result
+    except Exception as e:
+        log_event("ERROR", "Failed to force garbage collection", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Error forcing garbage collection: {e}")
 
 # DuckDB table operations
 @app.post("/tables")
@@ -155,16 +236,25 @@ def create_table(table: Table) -> Dict[str, str]:
 def append_to_table(table_name: str, data: TableData) -> Dict[str, str]:
     """Append data to DuckDB table using direct PyArrow transfer for optimal performance."""
     try:
-        # Convert list of dicts to PyArrow Table for zero-copy transfer
-        arrow_table = pa.Table.from_pylist(data.rows)
-        
-        # Use DuckDB's native Arrow support for zero-copy append
-        con.register("temp_data", arrow_table)
-        con.execute(f"INSERT INTO {table_name} SELECT * FROM temp_data")
-        con.unregister("temp_data")
+        with performance_monitor.track_operation(f"duckdb_append_{table_name}") as tracker:
+            # Convert list of dicts to PyArrow Table for zero-copy transfer
+            arrow_table = pa.Table.from_pylist(data.rows)
+            tracker.add_metric("rows", len(data.rows))
+            tracker.add_metric("table_name", table_name)
+            
+            # Track memory allocation for Arrow table
+            estimated_size = arrow_table.nbytes if hasattr(arrow_table, 'nbytes') else len(data.rows) * 100
+            memory_monitor.track_allocation("arrow_table", estimated_size)
+            
+            # Use DuckDB's native Arrow support for zero-copy append
+            with performance_monitor.db_monitor.track_query("INSERT", f"INSERT INTO {table_name}"):
+                con.register("temp_data", arrow_table)
+                con.execute(f"INSERT INTO {table_name} SELECT * FROM temp_data")
+                con.unregister("temp_data")
         
         return {"message": f"Data appended to table '{table_name}' successfully."}
     except Exception as e:
+        log_event("ERROR", "Failed to append data to table", table_name=table_name, error=str(e))
         raise HTTPException(status_code=400, detail=f"Error appending data: {e}")
 
 @app.delete("/tables/{table_name}")
@@ -208,17 +298,39 @@ def create_bucket(bucket_name: str):
 @app.put("/datasets/{bucket_name}/{object_name}")
 def upload_object(bucket_name: str, object_name: str, file: UploadFile = File(...)):
     try:
-        s3_client.upload_fileobj(file.file, bucket_name, object_name)
+        with performance_monitor.minio_monitor.track_operation("upload"):
+            # Track file size
+            file_size = file.size if hasattr(file, 'size') else 0
+            memory_monitor.track_allocation("minio_upload", file_size or 1024)
+            
+            s3_client.upload_fileobj(file.file, bucket_name, object_name)
+            
+            log_event("INFO", "Object uploaded successfully", 
+                     bucket=bucket_name, object=object_name, size_bytes=file_size)
+        
         return {"message": f"Object '{object_name}' uploaded to bucket '{bucket_name}' successfully."}
     except ClientError as e:
+        log_event("ERROR", "Failed to upload object", 
+                 bucket=bucket_name, object=object_name, error=str(e))
         raise HTTPException(status_code=400, detail=f"Error uploading object: {e}")
 
 @app.get("/datasets/{bucket_name}/{object_name}")
 def download_object(bucket_name: str, object_name: str):
     try:
-        response = s3_client.get_object(Bucket=bucket_name, Key=object_name)
-        return Response(content=response['Body'].read(), media_type=response['ContentType'])
+        with performance_monitor.minio_monitor.track_operation("download"):
+            response = s3_client.get_object(Bucket=bucket_name, Key=object_name)
+            content = response['Body'].read()
+            
+            # Track downloaded data size
+            memory_monitor.track_allocation("minio_download", len(content))
+            
+            log_event("INFO", "Object downloaded successfully", 
+                     bucket=bucket_name, object=object_name, size_bytes=len(content))
+            
+            return Response(content=content, media_type=response['ContentType'])
     except ClientError as e:
+        log_event("ERROR", "Failed to download object", 
+                 bucket=bucket_name, object=object_name, error=str(e))
         raise HTTPException(status_code=404, detail=f"Error downloading object: {e}")
 
 @app.delete("/datasets/{bucket_name}/{object_name}")

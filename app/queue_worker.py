@@ -3,16 +3,16 @@ Background worker for processing OpenLineage events from PGMQ
 """
 
 import asyncio
-import json
-import logging
+import time
+import orjson
 from typing import Any, Dict, Optional
 
 import asyncpg
+from loguru import logger
 from .config import get_settings
 from .lineage import LineageEvent, lineage_manager
 
 settings = get_settings()
-logger = logging.getLogger(__name__)
 
 
 class QueueWorker:
@@ -96,11 +96,21 @@ class QueueWorker:
                         
                         try:
                             # Parse the lineage event
-                            event_dict = json.loads(message_data) if isinstance(message_data, str) else message_data
+                            event_dict = orjson.loads(message_data) if isinstance(message_data, str) else message_data
                             event = LineageEvent(**event_dict)
                             
-                            # Process the event
+                            # Process the event with performance tracking
+                            start_time = time.time()
                             success = await lineage_manager.process_event(event)
+                            processing_duration = time.time() - start_time
+                            
+                            # Track lineage processing performance
+                            from .instrumentation.performance import performance_monitor
+                            performance_monitor.track_lineage_event(
+                                event.eventType, 
+                                processing_duration, 
+                                success
+                            )
                             
                             if success:
                                 # Delete message from queue
@@ -182,7 +192,7 @@ class QueueWorker:
             # Send to dead letter queue
             await conn.execute(
                 "SELECT pgmq.send('lineage_events_dlq', $1)",
-                json.dumps(dlq_message)
+                orjson.dumps(dlq_message).decode('utf-8')
             )
             
             # Delete from original queue

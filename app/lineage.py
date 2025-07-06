@@ -4,13 +4,14 @@ Handles lineage event creation, queuing, and processing
 """
 
 import asyncio
-import json
+import orjson
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
 import asyncpg
+from loguru import logger
 from openlineage.client import OpenLineageClient
 from openlineage.client.run import RunEvent, RunState
 from openlineage.client.facet import (
@@ -183,7 +184,7 @@ class LineageManager:
                 )
                 return True
         except Exception as e:
-            print(f"Failed to enqueue lineage event: {e}")
+            logger.error("Failed to enqueue lineage event", error=str(e))
             return False
     
     async def process_event(self, event: LineageEvent) -> bool:
@@ -220,7 +221,7 @@ class LineageManager:
                         event.eventTime,
                         event.producer,
                         event.schemaURL,
-                        json.dumps(event.model_dump())
+                        orjson.dumps(event.model_dump()).decode('utf-8')
                     )
                     
                     # Process datasets
@@ -245,7 +246,7 @@ class LineageManager:
                 
                 return True
         except Exception as e:
-            print(f"Failed to process lineage event: {e}")
+            logger.error("Failed to process lineage event", error=str(e))
             return False
     
     async def _ensure_job_exists(self, conn: asyncpg.Connection, namespace: str, name: str) -> int:
@@ -266,7 +267,7 @@ class LineageManager:
             VALUES ($1, $2, $3)
             RETURNING id
             """,
-            namespace, name, json.dumps({})
+            namespace, name, orjson.dumps({}).decode('utf-8')
         )
         
         return row["id"]
@@ -306,7 +307,7 @@ class LineageManager:
             VALUES ($1, $2, $3, $4)
             ON CONFLICT DO NOTHING
             """,
-            run_id, dataset_id, direction, json.dumps(dataset.get("facets", {}))
+            run_id, dataset_id, direction, orjson.dumps(dataset.get("facets", {})).decode('utf-8')
         )
     
     async def _ensure_dataset_exists(self, conn: asyncpg.Connection, namespace: str, name: str, uri: str) -> int:
@@ -327,7 +328,7 @@ class LineageManager:
             VALUES ($1, $2, $3, $4)
             RETURNING id
             """,
-            namespace, name, uri, json.dumps({})
+            namespace, name, uri, orjson.dumps({}).decode('utf-8')
         )
         
         return row["id"]
