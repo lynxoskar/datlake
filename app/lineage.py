@@ -46,7 +46,7 @@ class LineageEvent(BaseModel):
 class LineageManager:
     """Manages OpenLineage event creation and processing"""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.client = OpenLineageClient(
             url=settings.openlineage_url,
             api_key=settings.openlineage_api_key
@@ -55,7 +55,7 @@ class LineageManager:
         self.namespace = "ducklake"
         self.db_pool: Optional[asyncpg.Pool] = None
     
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize database connection pool"""
         self.db_pool = await asyncpg.create_pool(
             host=settings.postgres_host,
@@ -67,7 +67,7 @@ class LineageManager:
             max_size=10
         )
     
-    async def close(self):
+    async def close(self) -> None:
         """Close database connection pool"""
         if self.db_pool:
             await self.db_pool.close()
@@ -272,7 +272,7 @@ class LineageManager:
         
         return row["id"]
     
-    async def _ensure_run_exists(self, conn: asyncpg.Connection, run_id: UUID, job_id: int, event_type: str):
+    async def _ensure_run_exists(self, conn: asyncpg.Connection, run_id: UUID, job_id: int, event_type: str) -> None:
         """Ensure run exists in database"""
         # Check if run exists
         row = await conn.fetchrow(
@@ -290,7 +290,7 @@ class LineageManager:
                 run_id, job_id, event_type, self.producer_uri
             )
     
-    async def _process_dataset(self, conn: asyncpg.Connection, run_id: UUID, dataset: Dict[str, Any], direction: str):
+    async def _process_dataset(self, conn: asyncpg.Connection, run_id: UUID, dataset: Dict[str, Any], direction: str) -> None:
         """Process a dataset and create lineage relationships"""
         # Ensure dataset exists
         dataset_id = await self._ensure_dataset_exists(

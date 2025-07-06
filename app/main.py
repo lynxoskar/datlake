@@ -68,7 +68,7 @@ log_event("INFO", "FastAPI application starting", version="1.0.2")
 
 
 @app.on_event("startup")
-async def startup_event():
+async def startup_event() -> None:
     """Initialize services on startup"""
     log_event("INFO", "Initializing services...")
     try:
@@ -82,7 +82,7 @@ async def startup_event():
 
 
 @app.on_event("shutdown")
-async def shutdown_event():
+async def shutdown_event() -> None:
     """Cleanup on shutdown"""
     log_event("INFO", "Shutting down services...")
     try:
@@ -258,7 +258,8 @@ def append_to_table(table_name: str, data: TableData) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail=f"Error appending data: {e}")
 
 @app.delete("/tables/{table_name}")
-def delete_table(table_name: str):
+def delete_table(table_name: str) -> Dict[str, str]:
+    """Delete a DuckDB table."""
     try:
         con.execute(f"DROP TABLE {table_name}")
         return {"message": f"Table '{table_name}' deleted successfully."}
@@ -266,7 +267,8 @@ def delete_table(table_name: str):
         raise HTTPException(status_code=400, detail=f"Error deleting table: {e}")
 
 @app.get("/tables/{table_name}")
-def get_table(table_name: str):
+def get_table(table_name: str) -> Dict[str, Union[str, Dict[str, str]]]:
+    """Get table schema information."""
     try:
         # Get table schema using DuckDB's information_schema
         schema_query = f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{table_name}'"
@@ -277,7 +279,8 @@ def get_table(table_name: str):
         raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found or error retrieving schema: {e}")
 
 @app.post("/tables/{table_name}/query")
-def query_table(table_name: str, query: Query):
+def query_table(table_name: str, query: Query) -> Dict[str, List[Dict[str, Any]]]:
+    """Execute a query on a DuckDB table."""
     try:
         result_arrow_table = con.execute(query.query).fetch_arrow_table()
         return {"result": result_arrow_table.to_pylist()}
@@ -288,7 +291,8 @@ def query_table(table_name: str, query: Query):
 
 # MinIO dataset operations
 @app.post("/datasets/{bucket_name}")
-def create_bucket(bucket_name: str):
+def create_bucket(bucket_name: str) -> Dict[str, str]:
+    """Create a new MinIO bucket."""
     try:
         s3_client.create_bucket(Bucket=bucket_name)
         return {"message": f"Bucket '{bucket_name}' created successfully."}
@@ -296,7 +300,8 @@ def create_bucket(bucket_name: str):
         raise HTTPException(status_code=400, detail=f"Error creating bucket: {e}")
 
 @app.put("/datasets/{bucket_name}/{object_name}")
-def upload_object(bucket_name: str, object_name: str, file: UploadFile = File(...)):
+def upload_object(bucket_name: str, object_name: str, file: UploadFile = File(...)) -> Dict[str, str]:
+    """Upload an object to a MinIO bucket."""
     try:
         with performance_monitor.minio_monitor.track_operation("upload"):
             # Track file size
@@ -315,7 +320,8 @@ def upload_object(bucket_name: str, object_name: str, file: UploadFile = File(..
         raise HTTPException(status_code=400, detail=f"Error uploading object: {e}")
 
 @app.get("/datasets/{bucket_name}/{object_name}")
-def download_object(bucket_name: str, object_name: str):
+def download_object(bucket_name: str, object_name: str) -> Response:
+    """Download an object from a MinIO bucket."""
     try:
         with performance_monitor.minio_monitor.track_operation("download"):
             response = s3_client.get_object(Bucket=bucket_name, Key=object_name)
@@ -334,7 +340,8 @@ def download_object(bucket_name: str, object_name: str):
         raise HTTPException(status_code=404, detail=f"Error downloading object: {e}")
 
 @app.delete("/datasets/{bucket_name}/{object_name}")
-def delete_object(bucket_name: str, object_name: str):
+def delete_object(bucket_name: str, object_name: str) -> Dict[str, str]:
+    """Delete an object from a MinIO bucket."""
     try:
         s3_client.delete_object(Bucket=bucket_name, Key=object_name)
         return {"message": f"Object '{object_name}' from bucket '{bucket_name}' deleted successfully."}
@@ -342,7 +349,8 @@ def delete_object(bucket_name: str, object_name: str):
         raise HTTPException(status_code=400, detail=f"Error deleting object: {e}")
 
 @app.get("/datasets/{bucket_name}")
-def list_objects(bucket_name: str):
+def list_objects(bucket_name: str) -> Dict[str, Union[str, List[str]]]:
+    """List objects in a MinIO bucket."""
     try:
         response = s3_client.list_objects_v2(Bucket=bucket_name)
         objects = [obj['Key'] for obj in response.get('Contents', [])]
@@ -353,7 +361,7 @@ def list_objects(bucket_name: str):
 
 # Job and Run operations with OpenLineage integration
 @app.post("/jobs")
-async def create_job(job: Job):
+async def create_job(job: Job) -> Dict[str, str]:
     """Create a new job definition"""
     request_id = str(uuid.uuid4())
     log_event("INFO", "Creating job", request_id=request_id, job_name=job.name)
@@ -367,7 +375,7 @@ async def create_job(job: Job):
 
 
 @app.post("/jobs/{job_name}/runs")
-async def start_job_run(job_name: str, job_run: JobRun):
+async def start_job_run(job_name: str, job_run: JobRun) -> Dict[str, str]:
     """Start a new job run with OpenLineage tracking"""
     run_id = uuid.uuid4()
     request_id = str(uuid.uuid4())
@@ -401,7 +409,7 @@ async def start_job_run(job_name: str, job_run: JobRun):
 
 
 @app.put("/jobs/{job_name}/runs/{run_id}/complete")
-async def complete_job_run(job_name: str, run_id: UUID, completion: JobRunComplete):
+async def complete_job_run(job_name: str, run_id: UUID, completion: JobRunComplete) -> Dict[str, str]:
     """Complete a job run with OpenLineage tracking"""
     request_id = str(uuid.uuid4())
     
@@ -462,7 +470,7 @@ async def complete_job_run(job_name: str, run_id: UUID, completion: JobRunComple
 
 
 @app.get("/jobs")
-async def list_jobs():
+async def list_jobs() -> Dict[str, Union[List[Any], str]]:
     """List all jobs"""
     request_id = str(uuid.uuid4())
     try:
@@ -475,7 +483,7 @@ async def list_jobs():
 
 
 @app.get("/jobs/{job_name}")
-async def get_job(job_name: str):
+async def get_job(job_name: str) -> Dict[str, Union[str, List[Dict[str, Any]]]]:
     """Get job metadata and status"""
     request_id = str(uuid.uuid4())
     try:
@@ -494,7 +502,7 @@ async def get_job(job_name: str):
 
 
 @app.get("/jobs/{job_name}/runs/{run_id}")
-async def get_job_run(job_name: str, run_id: UUID):
+async def get_job_run(job_name: str, run_id: UUID) -> Dict[str, Any]:
     """Get details of a specific job run"""
     request_id = str(uuid.uuid4())
     try:

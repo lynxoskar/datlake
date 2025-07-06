@@ -18,12 +18,12 @@ settings = get_settings()
 class QueueWorker:
     """Background worker for processing queued OpenLineage events"""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.db_pool: Optional[asyncpg.Pool] = None
         self.running = False
         self.tasks = []
     
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize database connection pool"""
         self.db_pool = await asyncpg.create_pool(
             host=settings.postgres_host,
@@ -38,7 +38,7 @@ class QueueWorker:
         # Initialize lineage manager
         await lineage_manager.initialize()
     
-    async def start(self):
+    async def start(self) -> None:
         """Start the background worker"""
         if self.running:
             return
@@ -54,7 +54,7 @@ class QueueWorker:
         
         logger.info("Queue worker started")
     
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop the background worker"""
         if not self.running:
             return
@@ -78,7 +78,7 @@ class QueueWorker:
         
         logger.info("Queue worker stopped")
     
-    async def _process_lineage_events(self):
+    async def _process_lineage_events(self) -> None:
         """Process OpenLineage events from the queue"""
         while self.running:
             try:
@@ -136,7 +136,7 @@ class QueueWorker:
                 logger.error(f"Error in lineage event processing: {e}")
                 await asyncio.sleep(5)  # Wait before retrying
     
-    async def _process_notifications(self):
+    async def _process_notifications(self) -> None:
         """Process real-time notifications"""
         while self.running:
             try:
@@ -178,7 +178,7 @@ class QueueWorker:
                 logger.error(f"Error in notification processing: {e}")
                 await asyncio.sleep(5)
     
-    async def _move_to_dlq(self, conn: asyncpg.Connection, msg_id: int, message_data: Any, error: str):
+    async def _move_to_dlq(self, conn: asyncpg.Connection, msg_id: int, message_data: Any, error: str) -> None:
         """Move a failed message to dead letter queue"""
         try:
             # Create DLQ message with error info
@@ -206,7 +206,7 @@ class QueueWorker:
         except Exception as e:
             logger.error(f"Failed to move message {msg_id} to DLQ: {e}")
     
-    async def _handle_notification(self, message_data: Any):
+    async def _handle_notification(self, message_data: Any) -> None:
         """Handle real-time notification"""
         # This could be extended to:
         # - Send SSE events to connected clients
