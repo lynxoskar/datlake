@@ -1,143 +1,191 @@
-# Datlake Python SDK — Lineage‑First System Plan (v1)
+# Datlake Python SDK — Lineage‑First, Functional/ROP System Plan (v1)
 
 ## 1) Goals and scope
 - Primary goal: make it trivial for users and services to run lineage‑tracked jobs against Datlake.
-- The SDK will manage job context: start → operate (read/write) → complete, while notifying the backend for lineage and operational telemetry.
-- Provide convenience helpers for fetching table URIs (for reads) and registering new snapshots (for writes).
-- Optional “ship logs” feature: at job completion, upload and link a log file artifact to the run.
+- Programming model: functional, Railway‑Oriented Programming (ROP) with explicit `Result` types for predictable control flow and configurable error handling.
+- Provide pure, composable functions for: starting a job run, fetching data URIs, registering snapshots, completing a run, and (optionally) shipping a log artifact.
+- Keep an optional imperative `JobContext` wrapper for users who prefer `with` semantics, implemented on top of the functional core.
 
-Out of scope for v1: full detached caching and rich dataframe integrations (kept for v2+).
+## 2) Functional core: Result types and combinators
 
-## 2) Concepts and lifecycle
-- Job: a named unit of work (e.g., "daily_sales_etl").
-- Run: a single execution of a job (created on `start`).
-- JobContext: a context manager that encapsulates run state, emits start/complete events, and offers helpers.
-- Artifacts: optional outputs like a final log file uploaded and linked to the run.
+### 2.1 Result type
+```python
+from dataclasses import dataclass
+from typing import Generic, TypeVar, Callable, Union
 
+T = TypeVar("T")
+E = TypeVar("E")
+
+@dataclass(frozen=True)
+class Ok(Generic[T]):
+    value: T
+
+@dataclass(frozen=True)
+class Err(Generic[E]):
+    error: E
+
+Result = Union[Ok[T], Err[E]]
 ```
-with JobContext(job_name, metadata) as job:
-  uri = job.get_table_latest_uri("source_table")
-  df  = read_data(uri)                      # user’s code / helpers
-  out_uri = write_data_and_get_uri(df)      # user’s code / helpers
-  job.register_snapshot("target_table", out_uri, format="parquet", schema=...)  
-  # (optional) job.log_event(...)
-# on exit → job.complete(success/failed) and (optional) upload log file
+
+### 2.2 Combinators
+```python
+def map(result: Result[T, E], f: Callable[[T], T]) -> Result[T, E]:
+    return Ok(f(result.value)) if isinstance(result, Ok) else result
+
+def map_err(result: Result[T, E], f: Callable[[E], E]) -> Result[T, E]:
+    return Err(f(result.error)) if isinstance(result, Err) else result
+
+def and_then(result: Result[T, E], f: Callable[[T], Result[T, E]]) -> Result[T, E]:
+    return f(result.value) if isinstance(result, Ok) else result
+
+def tee(result: Result[T, E], f: Callable[[T], None]) -> Result[T, E]:
+    if isinstance(result, Ok):
+        f(result.value)
+    return result
+
+def recover(result: Result[T, E], f: Callable[[E], Result[T, E]]) -> Result[T, E]:
+    return f(result.error) if isinstance(result, Err) else result
 ```
 
-## 3) API design
+## 3) Functional SDK surface (pure orchestration)
 
-### 3.1 Client configuration
-- Env vars: `DATLAKE_API_URL`, `DATLAKE_API_KEY` (or per‑call token).
-- Optional settings:
-  - `DATLAKE_ARTIFACT_BUCKET` (for log uploads via SDK helper)
-  - `DATLAKE_DEFAULT_TIMEOUT_MS` (HTTP timeouts)
-  - `DATLAKE_LOG_SHIP=true|false` (default opt‑in behavior)
+### Types
+```python
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, List
 
+@dataclass
+class Run:
+    job_name: str
+    run_id: str
+
+@dataclass
+class UriInfo:
+    table_name: str
+    uri: str
+    format: str
+    schema: Optional[Dict[str, Any]]
+
+@dataclass
+class SnapshotInfo:
+    table_name: str
+    snapshot_id: str
+    uri: str
+
+@dataclass
+class Artifact:
+    type: str  # e.g. "log"
+    uri: str
+```
+
+### Functional operations
+```python
+# All functions return Result[Ok(...)/Err(...)] and never raise for expected failures
+
+def start_run(client, job_name: str, metadata: Optional[Dict[str, Any]] = None) -> Result[Run, SDKError]:
+    ...  # POST /api/v1/jobs/{job}/runs
+
+def complete_run(client, run: Run, success: bool, extra: Optional[Dict[str, Any]] = None,
+                 artifacts: Optional[List[Artifact]] = None) -> Result[None, SDKError]:
+    ...  # PUT /api/v1/jobs/{job}/runs/{run_id}/complete
+
+def fetch_latest_uri(client, run: Optional[Run], table_name: str) -> Result[UriInfo, SDKError]:
+    ...  # GET /api/v1/tables/{table}/snapshots/latest
+
+def register_snapshot(client, run: Run, table_name: str, uri: str, *,
+                      format: str, schema: Optional[Dict[str, Any]] = None) -> Result[SnapshotInfo, SDKError]:
+    ...  # POST /api/v1/jobs/register-snapshot
+
+def upload_object(client, bucket: str, object_name: str, file_path: str) -> Result[str, SDKError]:
+    ...  # PUT /api/v1/datasets/{bucket}/{object}
+
+# Convenience: attach log for shipment on completion
+
+def make_log_artifact(bucket: str, run: Run, local_log_path: str) -> Result[Artifact, SDKError]:
+    object_name = f"jobs/{run.job_name}/{run.run_id}/run.log"
+    return map(upload_object(client=None, bucket=bucket, object_name=object_name, file_path=local_log_path),
+               lambda uri: Artifact(type="log", uri=uri))
+```
+
+## 4) Configurable error handling (policy‑driven)
+
+The SDK reads policies from environment variables or a config file and applies them inside the HTTP layer and combinators.
+
+- `DATLAKE_SDK_ERROR_STRATEGY`:
+  - `fail_fast` (default): first `Err` aborts the pipeline; caller decides on `complete_run` with `success=False`.
+  - `continue_on_not_found`: convert specific 404 lookups (e.g., `fetch_latest_uri`) into `Ok(None)` or a sentinel to continue with defaults.
+  - `suppress_transient`: auto‑retry transient classes and downgrade to warnings if still failing.
+- `DATLAKE_SDK_RETRY` (e.g., `max=3,base_ms=200,jitter=true`): applies to idempotent requests.
+- `DATLAKE_SDK_ON_ERROR` (e.g., `log_only`, `raise`, `emit_event`): how the SDK reacts internally; still surfaces `Result` to the caller.
+
+Policy application example
+```python
+res = fetch_latest_uri(client, run, "users_raw")
+res = recover(res, lambda e: Ok(UriInfo("users_raw", uri="", format="", schema=None))
+              if (policy.continue_on_not_found and e.code == 404) else Err(e))
+```
+
+## 5) Railway examples
+
+### 5.1 Read‑transform‑write pipeline
 ```python
 from datlake_sdk import DatlakeClient
+from datlake_sdk.functional import start_run, fetch_latest_uri, register_snapshot, complete_run, and_then, map, tee, Err, Ok
 
-client = DatlakeClient(
-  base_url=os.getenv("DATLAKE_API_URL"),
-  api_key=os.getenv("DATLAKE_API_KEY"),
-)
+client = DatlakeClient(base_url=..., api_key=...)
+
+# 1) Start
+r0 = start_run(client, "daily_users", metadata={"source": "s3"})
+
+# 2) Fetch latest source
+r1 = and_then(r0, lambda run: fetch_latest_uri(client, run, "users_raw"))
+
+# 3) Load & transform (user function returns uri of output)
+
+def process(u: UriInfo) -> Result[str, SDKError]:
+    try:
+        df = load_users(u.uri)
+        out_uri = write_users_curated(df)  # s3://...
+        return Ok(out_uri)
+    except Exception as ex:
+        return Err(SDKError.from_exception(ex))
+
+r2 = and_then(r1, process)
+
+# 4) Register snapshot
+r3 = and_then(r2, lambda out_uri: register_snapshot(client, r0.value, "users_curated", out_uri, format="parquet"))
+
+# 5) Complete (success based on chain result)
+if isinstance(r3, Ok):
+    complete_run(client, r0.value, success=True)
+else:
+    complete_run(client, r0.value, success=False, extra={"error": str(r3.error)})
 ```
 
-### 3.2 JobContext
-- `JobContext` manages: start, heartbeat (optional), custom events, and completion.
-- Methods:
-  - `start(job_name: str, metadata: dict | None) -> JobContext` (usually internal; use constructor/with)
-  - `log_event(event_type: str, data: dict)`
-  - `get_table_latest_uri(table_name: str) -> str`
-  - `register_snapshot(table_name: str, uri: str, format: str, schema: dict | None) -> dict`
-  - `complete(success: bool = True, extra: dict | None = None)`
-  - `attach_log(filepath: str)` (marks for upload on completion)
-
-Usage
+### 5.2 Shipping a log artifact (opt‑in)
 ```python
-from datlake_sdk import JobContext
-
-with JobContext(client, job_name="daily_sales_etl", metadata={"source": "s3"}, ship_logs=True) as job:
-    src = job.get_table_latest_uri("sales_raw")
-    df  = read_sales(src)  # user-defined
-    out_uri = write_sales_curated(df)  # returns s3://.../parquet
-    job.register_snapshot("sales_curated", out_uri, format="parquet", schema=df_schema)
-    job.log_event("metrics", {"rows": len(df)})
-# on exit: job.complete(success=True) and if ship_logs, upload and link logs
+if ship_logs and isinstance(r0, Ok):
+    art = make_log_artifact(artifact_bucket, r0.value, "/var/log/app/run.log")
+    arts = [art.value] if isinstance(art, Ok) else []
+    complete_run(client, r0.value, success=isinstance(r3, Ok), artifacts=arts)
 ```
 
-### 3.3 Data helpers (thin)
-- Keep SDK minimal; do not force a single dataframe engine.
-- Provide optional helpers to ease IO without choosing the user’s stack:
-  - `resolve_table_uri(table_name: str) -> str`
-  - `upload_object(bucket: str, object_name: str, file_path: str) -> str` (to support artifact upload)
+## 6) Backend endpoints (normalized intent)
+- POST `/api/v1/jobs/{job_name}/runs`
+- PUT  `/api/v1/jobs/{job_name}/runs/{run_id}/complete`
+- GET  `/api/v1/tables/{table}/snapshots/latest`
+- POST `/api/v1/jobs/register-snapshot`
+- PUT  `/api/v1/datasets/{bucket}/{object}` (artifact upload)
 
-## 4) Backend API interactions (canonical intent)
-Normalize towards `/api/v1/*` (aliases may exist during transition):
+## 7) Imperative wrapper (optional)
+`JobContext` remains available, internally delegating to the functional operations and policies. It exposes the same behavior but hides `Result` from basic users.
 
-- Jobs & runs
-  - POST `/api/v1/jobs/{job_name}/runs` → start a run, returns `{ run_id, ... }`
-  - PUT  `/api/v1/jobs/{job_name}/runs/{run_id}/complete` → mark success/failure + metadata
-  - POST `/api/v1/events/broadcast` → custom events (optionally namespaced to run)
+## 8) Errors, retries, and observability
+- Typed errors with categories: `AuthError`, `NotFound`, `Conflict`, `Transient`, `ServerError`.
+- Per‑operation idempotency keys where applicable; safe retries with exponential backoff + jitter.
+- Correlation headers (`X-Request-Id`) and run_id propagation; optional `events` on errors based on policy.
 
-- Tables (read path)
-  - GET `/api/v1/tables/{table_name}/snapshots/latest` → `{ uri, format, schema, created_at }`
-
-- Snapshots (write path)
-  - POST `/api/v1/jobs/register-snapshot` (authenticated, lineage-aware)
-    - Body: `{ table_name, uri, format, schema, job_name, run_id }`
-
-- Artifacts (optional log shipping)
-  - SDK uploads the log file via datasets endpoint, then links artifact to the run via completion payload:
-    - PUT `/api/v1/datasets/{bucket}/{object}` (stream upload)
-    - On `complete`, include `{ artifacts: [{ type: "log", uri: "s3://..." }] }`
-
-## 5) Error handling, retries, and telemetry
-- All HTTP interactions use retries with exponential backoff and jitter (idempotent endpoints only).
-- Clear exceptions: AuthError, NotFound, Conflict, TransientNetworkError, ServerError.
-- Correlation: include `X-Request-Id` pass‑through; surface run_id in exceptions where relevant.
-- Optional heartbeats: SDK may send periodic pings as events, controlled by `heartbeat_interval_s`.
-
-## 6) Logging & artifact shipping (opt‑in)
-- `ship_logs=True` in `JobContext` collects a file path (default points to the process log) and uploads on `complete`.
-- Upload target derived from `DATLAKE_ARTIFACT_BUCKET` and object key `jobs/{job_name}/{run_id}/run.log`.
-- The completion call includes the uploaded URI as an artifact.
-
-```python
-with JobContext(client, "etl_users", ship_logs=True, log_path="/var/log/app/run.log") as job:
-    ...
-# completion uploads / links the log automatically
-```
-
-## 7) Minimal implementation plan
-- Phase A — Core lineage context (v1.0)
-  - DatlakeClient, auth, config
-  - JobContext: start/complete, log_event, get_table_latest_uri, register_snapshot
-  - Optional log shipping: upload + artifact linkage
-  - Solid retries and typed errors
-- Phase B — Quality & ergonomics (v1.1)
-  - Heartbeats, progress events
-  - Better artifact helpers (JSON metrics, HTML reports)
-  - Type hints, mypy, ruff; examples and docstrings
-- Phase C — Data convenience (v1.2+)
-  - Optional helpers for DuckDB/Polars integration
-  - Detached caching (latest snapshot URI memoization)
-
-## 8) Example end‑to‑end
-```python
-from datlake_sdk import DatlakeClient, JobContext
-
-client = DatlakeClient(base_url="https://api.datlake.local", api_key="...")
-
-with JobContext(client, job_name="daily_users", ship_logs=True) as job:
-    src_uri = job.get_table_latest_uri("users_raw")
-    df = load_users(src_uri)               # user code
-    out_uri = write_users_curated(df)      # e.g., returns s3://...parquet
-    job.register_snapshot("users_curated", out_uri, format="parquet")
-    job.log_event("stats", {"users": len(df)})
-# JobContext completes; if enabled, run.log uploaded and linked
-```
-
-## 9) Packaging & distribution
-- `pyproject.toml` with typed package `datlake_sdk`.
-- Publish to PyPI; semantic versioning.
-- Docs page: `docs/sdk/python.md` with API reference and recipes.
+## 9) Packaging & roadmap
+- v1.0: functional core + policies + imperative wrapper + examples.
+- v1.1: heartbeats, progress events, richer artifact types, structured metrics helpers.
+- v1.2+: detached caching and optional DuckDB/Polars helpers.
