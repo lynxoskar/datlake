@@ -4,7 +4,7 @@ Public surface:
 - DatlakeClient
 - Result, Ok, Err
 - functional operations: start_run, complete_run, fetch_latest_uri, register_snapshot, upload_object, make_log_artifact
-- DetachedIO: external data transfer helpers (download/upload) with registration only
+- DetachedJob: detached lineage registration with arbitrary inputs/outputs
 - JobContext (optional wrapper)
 """
 
@@ -17,8 +17,9 @@ from .functional import (
     register_snapshot,
     upload_object,
     make_log_artifact,
+    DatasetRef,
 )
-from .detached import DetachedIO
+from .detached import DetachedJob
 from .context import JobContext
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "register_snapshot",
     "upload_object",
     "make_log_artifact",
-    "DetachedIO",
+    "DatasetRef",
+    "DetachedJob",
     "JobContext",
 ]

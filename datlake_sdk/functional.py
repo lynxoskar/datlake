@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Optional
 
 from .client import DatlakeClient
 from .errors import SDKError, NotFound, ServerError
@@ -34,6 +34,16 @@ class Artifact:
     uri: str
 
 
+@dataclass
+class DatasetRef:
+    name: str
+    description: str
+    uri: Optional[str] = None
+    format: Optional[str] = None
+    schema: Optional[Dict[str, Any]] = None
+    tags: Optional[List[str]] = None
+
+
 def _safe_json(resp) -> Result[Dict[str, Any], SDKError]:
     try:
         return Ok(resp.json())
@@ -62,15 +72,23 @@ def complete_run(
     client: DatlakeClient,
     run: Run,
     success: bool,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
     artifacts: Optional[List[Artifact]] = None,
 ) -> Result[None, SDKError]:
     try:
         payload: Dict[str, Any] = {"success": success}
+        meta: Dict[str, Any] = {}
+        if metadata:
+            meta.update(metadata)
         if extra:
-            payload["extra"] = extra
+            # Back-compat: merge extra fields under metadata
+            meta.update(extra)
         if artifacts:
-            payload["artifacts"] = [artifact.__dict__ for artifact in artifacts]
+            meta.setdefault("artifacts", [artifact.__dict__ for artifact in artifacts])
+        if meta:
+            payload["metadata"] = meta
         client._request("PUT", f"/api/v1/jobs/{run.job_name}/runs/{run.run_id}/complete", json_body=payload)
         return Ok(None)
     except SDKError as e:
