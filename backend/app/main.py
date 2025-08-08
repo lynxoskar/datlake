@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from contextlib import asynccontextmanager
-import duckdb
+import duckdb  # used indirectly via ducklake_conn setup
 import pyarrow as pa
 import pyarrow.parquet as pq
 import boto3
@@ -440,22 +440,15 @@ def read_root() -> Dict[str, str]:
 # Log application startup
 log_event("INFO", "FastAPI application starting", version="1.0.2")
 
-# Initialize DuckDB with DuckLake PostgreSQL backend
-con = duckdb.connect(database=':memory:', read_only=False)
+# Initialize DuckLake connection (DuckDB + DuckLake + Postgres catalog)
+from .ducklake_conn import con, setup_ducklake
 
 # Get application settings
 from .config import get_settings
 settings = get_settings()
 
-# Install required extensions for DuckLake
-con.execute("INSTALL ducklake;")
-con.execute("INSTALL postgres;")
-con.execute("INSTALL s3;")  # Add S3 extension for MinIO support
-con.execute("LOAD ducklake;")
-con.execute("LOAD postgres;")
-con.execute("LOAD s3;")
 
-def setup_ducklake_connection():
+def setup_ducklake_connection_legacy():
     """Setup DuckLake with proper secrets management and S3 configuration."""
     try:
         # 1. Create PostgreSQL secret for catalog database
@@ -593,26 +586,20 @@ def validate_ducklake_connection():
 # Setup DuckLake connection with proper error handling
 ducklake_connected = False
 
-if setup_ducklake_connection():
-    if validate_ducklake_connection():
-        ducklake_connected = True
-        log_event("INFO", "DuckLake connection established and validated")
-    else:
-        log_event("WARNING", "DuckLake connection established but validation failed")
+status = setup_ducklake()
+if status.get("connected"):
+    ducklake_connected = True
+    log_event("INFO", "DuckLake connection established and validated")
 else:
     if settings.is_development():
         log_event("WARNING", "Attempting fallback connection for development")
-        if setup_ducklake_fallback():
-            if validate_ducklake_connection():
-                ducklake_connected = True
-                log_event("INFO", "DuckLake fallback connection established and validated")
-            else:
-                log_event("WARNING", "DuckLake fallback connection established but validation failed")
+        if setup_ducklake_fallback() and validate_ducklake_connection():
+            ducklake_connected = True
+            log_event("INFO", "DuckLake fallback connection established and validated")
         else:
-            log_event("ERROR", "All DuckLake connection attempts failed in development")
+            log_event("ERROR", f"All DuckLake connection attempts failed in development: {status.get('error')}")
     else:
-        log_event("CRITICAL", "DuckLake connection failed in production")
-        # In production, you might want to fail fast
+        log_event("CRITICAL", f"DuckLake connection failed in production: {status.get('error')}")
         raise RuntimeError("Failed to establish DuckLake connection in production environment")
 
 # Store connection status for health checks
