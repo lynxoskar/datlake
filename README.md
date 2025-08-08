@@ -65,15 +65,78 @@ r3 = and_then(r2, lambda uri: register_snapshot(client, r0.value, "users_curated
 complete_run(client, r0.value, success=isinstance(r3, Ok)) if isinstance(r0, Ok) else None
 ```
 
-### What happens on the backend?
-- When the SDK starts a run, the backend creates a `run_id` for `job_name` and begins emitting lineage metadata.
-- When you call `get_table_latest_uri`, the backend resolves the latest snapshot URI for the table (respecting RBAC).
-- When you register a snapshot, the backend records the output snapshot and associates it with the current run for full lineage.
-- On completion, the backend marks the run as success/failed, updating lineage state and optional artifacts (like a log file) for downstream consumers.
+### Configuration via environment
+```bash
+export DATLAKE_API_URL="http://localhost:8000"
+export DATLAKE_API_KEY="<token>"
+# Optional SDK policies
+export DATLAKE_SDK_ERROR_STRATEGY=fail_fast   # or: continue_on_not_found | suppress_transient
+export DATLAKE_SDK_RETRY_MAX=3
+export DATLAKE_SDK_RETRY_BASE_MS=200
+export DATLAKE_SDK_RETRY_JITTER=true
+```
 
-### Downstream consumers and events
-- UI (frontend) can stream real‑time events: job status, lineage processing, system metrics.
-- Other services can subscribe to events (SSE endpoints) or query lineage state to build dashboards, trigger downstream jobs, or audit data flows.
+---
+
+## Backend REST API (brief)
+The REST API is versioned under `/api/v1` and secured with bearer tokens.
+
+- Base URL: `http://localhost:8000`
+- Auth: `Authorization: Bearer <token>`
+- Content: JSON request/response unless noted
+
+### Jobs & runs (lineage core)
+- Start a run
+  ```bash
+  curl -s -X POST \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    "$API/api/v1/jobs/daily_users/runs" \
+    -d '{"metadata": {"source": "s3"}}'
+  # => { "run_id": "...", "job_name": "daily_users", ... }
+  ```
+- Complete a run
+  ```bash
+  curl -s -X PUT \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    "$API/api/v1/jobs/daily_users/runs/$RUN_ID/complete" \
+    -d '{"success": true, "artifacts": [{"type": "log", "uri": "s3://.../run.log"}]}'
+  ```
+
+### Tables (reads)
+- Resolve latest snapshot
+  ```bash
+  curl -s -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v1/tables/users_raw/snapshots/latest"
+  # => { "table_name":"users_raw", "uri":"s3://...", "format":"parquet", "schema": {...} }
+  ```
+
+### Snapshots (writes)
+- Register an output snapshot
+  ```bash
+  curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    "$API/api/v1/jobs/register-snapshot" \
+    -d '{"table_name":"users_curated","uri":"s3://...","format":"parquet","schema":null,"job_name":"daily_users","run_id":"'$RUN_ID'"}'
+  ```
+
+### Datasets (artifacts)
+- Upload a log artifact (SDK wraps this)
+  ```bash
+  curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
+    --data-binary @run.log \
+    "$API/api/v1/datasets/datlake-artifacts/jobs/daily_users/$RUN_ID/run.log"
+  ```
+
+### Events (SSE)
+- Stream events for live monitoring
+  ```bash
+  curl -N -H "Accept: text/event-stream" "$API/api/v1/events/stream?events=job_status,lineage_event"
+  ```
+
+### Health & admin
+- Health: `GET $API/health` (alias) or `GET $API/api/v1/admin/health`
+- Config summary: `GET $API/api/v1/admin/config/summary`
+
+For a full description and the source of truth, see docs/backend/api-organization.md (OpenAPI).
 
 ---
 
