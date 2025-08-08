@@ -8,3 +8,7 @@ nodes:
     hostPort: 8000
     listenAddress: "0.0.0.0"
     protocol: TCP
+  - containerPort: 30500 # NodePort for Docker registry
+    hostPort: 5000
+    listenAddress: "0.0.0.0"
+    protocol: TCP

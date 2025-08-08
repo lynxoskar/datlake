@@ -12,8 +12,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-from pydantic import BaseSettings, Field, SecretStr, validator, root_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic.networks import AnyHttpUrl, PostgresDsn
+from pydantic_settings import BaseSettings
 
 from .exceptions import InvalidConfigurationError, MissingConfigurationError
 
@@ -118,16 +119,68 @@ class DatabaseSettings(BaseSettings):
     duckdb_threads: int = Field(4, ge=1, le=32)
     duckdb_enable_optimizer: bool = True
     
-    @validator("postgres_max_connections")
-    def validate_max_connections(cls, v, values):
-        if "postgres_min_connections" in values and v < values["postgres_min_connections"]:
+    # DuckLake specific settings
+    ducklake_metadata_schema: str = "main"
+    ducklake_metadata_catalog: str = "ducklake_metadata"
+    ducklake_encrypted: bool = False
+    ducklake_data_inlining_row_limit: int = Field(0, ge=0, le=10000)
+    ducklake_snapshot_version: Optional[str] = None
+    ducklake_snapshot_time: Optional[str] = None
+    ducklake_read_only: bool = False
+    
+    # DuckLake connection retry settings
+    ducklake_connection_retries: int = Field(3, ge=1, le=10)
+    ducklake_connection_retry_delay: float = Field(2.0, ge=0.1, le=10.0)
+    ducklake_connection_timeout: float = Field(30.0, ge=5.0, le=300.0)
+    
+    @field_validator("postgres_max_connections")
+    @classmethod
+    def validate_max_connections(cls, v, info):
+        if info.data and "postgres_min_connections" in info.data and v < info.data["postgres_min_connections"]:
             raise ValueError("max_connections must be >= min_connections")
         return v
+    
+    @field_validator("ducklake_snapshot_version")
+    @classmethod
+    def validate_snapshot_version(cls, v):
+        if v is not None and not v.strip():
+            raise ValueError("snapshot_version cannot be empty string")
+        return v
+    
+    @field_validator("ducklake_snapshot_time")
+    @classmethod
+    def validate_snapshot_time(cls, v):
+        if v is not None and not v.strip():
+            raise ValueError("snapshot_time cannot be empty string")
+        return v
+    
+    @model_validator(mode='after')
+    def validate_ducklake_snapshots(self):
+        """Ensure only one snapshot option is specified."""
+        if self.ducklake_snapshot_version and self.ducklake_snapshot_time:
+            raise ValueError("Cannot specify both snapshot_version and snapshot_time")
+        
+        return self
     
     @property
     def postgres_dsn(self) -> str:
         """Build PostgreSQL DSN."""
         return f"postgresql://{self.postgres_user}:{self.postgres_password.get_secret_value()}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+    
+    def get_ducklake_config_summary(self) -> Dict[str, Any]:
+        """Get DuckLake configuration summary."""
+        return {
+            "metadata_schema": self.ducklake_metadata_schema,
+            "metadata_catalog": self.ducklake_metadata_catalog,
+            "encrypted": self.ducklake_encrypted,
+            "data_inlining_row_limit": self.ducklake_data_inlining_row_limit,
+            "snapshot_version": self.ducklake_snapshot_version,
+            "snapshot_time": self.ducklake_snapshot_time,
+            "read_only": self.ducklake_read_only,
+            "connection_retries": self.ducklake_connection_retries,
+            "connection_retry_delay": self.ducklake_connection_retry_delay,
+            "connection_timeout": self.ducklake_connection_timeout
+        }
     
     class Config:
         env_prefix = "DB_"
@@ -158,7 +211,8 @@ class StorageSettings(BaseSettings):
     multipart_threshold: int = Field(8 * 1024 * 1024, ge=1024 * 1024)  # 8MB
     max_concurrency: int = Field(10, ge=1, le=50)
     
-    @validator("minio_endpoint")
+    @field_validator("minio_endpoint")
+    @classmethod
     def validate_endpoint(cls, v):
         if not v or ":" not in v:
             raise ValueError("MinIO endpoint must include port (e.g., localhost:9000)")
@@ -249,26 +303,24 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
     
-    @root_validator
-    def validate_environment_settings(cls, values):
+    @model_validator(mode='after')
+    def validate_environment_settings(self):
         """Validate settings based on environment."""
-        environment = values.get("environment", Environment.DEVELOPMENT)
-        
-        if environment == Environment.PRODUCTION:
+        if self.environment == Environment.PRODUCTION:
             # Production-specific validations
-            if values.get("debug", False):
+            if self.debug:
                 raise ValueError("Debug mode must be disabled in production")
             
-            monitoring = values.get("monitoring")
-            if monitoring and not monitoring.openlineage_url:
+            if self.monitoring and not self.monitoring.openlineage_url:
                 raise ValueError("OpenLineage URL required in production")
         
-        return values
+        return self
     
-    @validator("debug")
-    def validate_debug_in_production(cls, v, values):
+    @field_validator("debug")
+    @classmethod
+    def validate_debug_in_production(cls, v, info):
         """Ensure debug is disabled in production."""
-        if values.get("environment") == Environment.PRODUCTION and v:
+        if info.data and info.data.get("environment") == Environment.PRODUCTION and v:
             raise ValueError("Debug mode must be disabled in production")
         return v
     
@@ -298,6 +350,7 @@ class Settings(BaseSettings):
                 "database": self.database.postgres_db,
                 "pool_size": f"{self.database.postgres_min_connections}-{self.database.postgres_max_connections}"
             },
+            "ducklake": self.database.get_ducklake_config_summary(),
             "storage": {
                 "endpoint": self.storage.minio_endpoint,
                 "secure": self.storage.minio_secure,

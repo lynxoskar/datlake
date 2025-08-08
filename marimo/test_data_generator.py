@@ -117,3 +117,4 @@ minio_bucket_name = mo.ui.text(value="ducklake-data", label="MinIO Bucket Name")
 minio_object_name = mo.ui.text(value="instrument_data.parquet", label="MinIO Object Name")
 
 mo.ui.button(label="Upload Data to MinIO", on_click=lambda: upload_data_to_minio(generate_data(), minio_bucket_name.value, minio_object_name.value))
+

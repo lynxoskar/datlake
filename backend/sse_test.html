@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DuckLake SSE Test</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls {
+            grid-column: 1 / -1;
+        }
+        .wide-panel {
+            grid-column: 1 / -1;
+        }
+        h1, h2 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #005999;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.zombie {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .events {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .event {
+            margin: 5px 0;
+            padding: 8px;
+            border-left: 4px solid #007acc;
+            background: white;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .event.lineage_event {
+            border-left-color: #28a745;
+        }
+        .event.job_status {
+            border-left-color: #007bff;
+        }
+        .event.queue_status {
+            border-left-color: #ffc107;
+        }
+        .event.system_metric {
+            border-left-color: #17a2b8;
+        }
+        .event.error {
+            border-left-color: #dc3545;
+        }
+        .event.heartbeat {
+            border-left-color: #6c757d;
+            opacity: 0.6;
+        }
+        .event.ping {
+            border-left-color: #fd7e14;
+            background: #fff3cd;
+        }
+        .timestamp {
+            color: #6c757d;
+            font-size: 10px;
+        }
+        .controls input, .controls select {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+        }
+        .stats {
+            font-size: 12px;
+            color: #666;
+        }
+        .zombie-stats {
+            font-size: 12px;
+            color: #856404;
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 3px;
+            font-size: 11px;
+            overflow-x: auto;
+        }
+        .client-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .client-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        .client-item.zombie {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+        .client-item.healthy {
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .metric-card {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007acc;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>🦆 DuckLake SSE Test with Zombie Detection</h1>
+    
+    <div class="container">
+        <div class="panel controls">
+            <h2>Connection Controls</h2>
+            <div>
+                <button id="connectBtn" onclick="connect()">Connect to SSE</button>
+                <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+                <button onclick="clearEvents()">Clear Events</button>
+                <button onclick="testCustomEvent()">Test Custom Event</button>
+            </div>
+            
+            <div>
+                <label>Event Types:</label>
+                <select id="eventTypes" multiple>
+                    <option value="lineage_event" selected>Lineage Events</option>
+                    <option value="job_status" selected>Job Status</option>
+                    <option value="queue_status" selected>Queue Status</option>
+                    <option value="system_metric" selected>System Metrics</option>
+                    <option value="error" selected>Errors</option>
+                    <option value="heartbeat">Heartbeat</option>
+                    <option value="ping" selected>Ping (Zombie Detection)</option>
+                </select>
+            </div>
+            
+            <div id="status" class="status disconnected">Disconnected</div>
+            <div id="stats" class="stats"></div>
+            <div id="zombieStats" class="zombie-stats" style="display: none;"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Live Events</h2>
+            <div id="events" class="events"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Test Actions</h2>
+            <button onclick="createTestJob()">Create Test Job</button>
+            <button onclick="startTestJobRun()">Start Job Run</button>
+            <button onclick="completeTestJobRun()">Complete Job Run</button>
+            <button onclick="getQueueStats()">Get Queue Stats</button>
+            <button onclick="getSSEStats()">Get SSE Stats</button>
+            <button onclick="getZombieStats()">Get Zombie Stats</button>
+            <button onclick="cleanupZombies()" class="danger">Cleanup Zombies</button>
+            
+            <div id="testResults">
+                <h3>Test Results</h3>
+                <div id="results"></div>
+            </div>
+        </div>
+        
+        <div class="panel wide-panel">
+            <h2>Connection Statistics</h2>
+            <div id="connectionMetrics" class="metric-grid"></div>
+            
+            <h3>Active Clients</h3>
+            <div id="clientList" class="client-list"></div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let eventCount = 0;
+        let lastRunId = null;
+        let clientId = null;
+        let pingCount = 0;
+        let pongCount = 0;
+        let connectionHealth = {
+            connected: false,
+            lastPing: null,
+            lastPong: null,
+            missedPings: 0
+        };
+
+        function connect() {
+            const eventTypes = Array.from(document.getElementById('eventTypes').selectedOptions)
+                .map(option => option.value);
+            
+            const url = eventTypes.length > 0 
+                ? `/events/stream?events=${eventTypes.join(',')}`
+                : '/events/stream';
+            
+            eventSource = new EventSource(url);
+            
+            eventSource.onopen = function() {
+                connectionHealth.connected = true;
+                document.getElementById('status').textContent = 'Connected';
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                updateStats();
+            };
+            
+            eventSource.onerror = function() {
+                connectionHealth.connected = false;
+                document.getElementById('status').textContent = 'Connection Error';
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+            };
+            
+            // Listen for all event types
+            ['lineage_event', 'job_status', 'queue_status', 'system_metric', 'error', 'heartbeat', 'ping'].forEach(eventType => {
+                eventSource.addEventListener(eventType, function(event) {
+                    displayEvent(eventType, JSON.parse(event.data));
+                    
+                    // Handle ping events - respond with pong
+                    if (eventType === 'ping') {
+                        handlePingEvent(JSON.parse(event.data));
+                    }
+                });
+            });
+        }
+
+        function disconnect() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            connectionHealth.connected = false;
+            document.getElementById('status').textContent = 'Disconnected';
+            document.getElementById('status').className = 'status disconnected';
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+        }
+
+        function handlePingEvent(eventData) {
+            pingCount++;
+            connectionHealth.lastPing = new Date();
+            
+            // Extract ping information
+            const pingData = eventData.data;
+            if (pingData.expected_pong && pingData.ping_id) {
+                // Send pong response
+                sendPongResponse(pingData.ping_id);
+            }
+            
+            updateStats();
+        }
+
+        async function sendPongResponse(pingId) {
+            try {
+                // In a real implementation, we'd extract the client ID from the connection
+                // For this demo, we'll use a placeholder
+                const response = await fetch('/events/pong', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: clientId || 'demo-client',
+                        ping_id: pingId
+                    })
+                });
+                
+                if (response.ok) {
+                    pongCount++;
+                    connectionHealth.lastPong = new Date();
+                    connectionHealth.missedPings = 0;
+                } else {
+                    connectionHealth.missedPings++;
+                }
+            } catch (error) {
+                console.error('Failed to send pong response:', error);
+                connectionHealth.missedPings++;
+            }
+        }
+
+        function displayEvent(type, data) {
+            eventCount++;
+            const eventsDiv = document.getElementById('events');
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event ${type}`;
+            
+            const timestamp = new Date(data.timestamp * 1000).toLocaleTimeString();
+            
+            // Special handling for ping events
+            if (type === 'ping') {
+                eventDiv.innerHTML = `
+                    <div class="timestamp">${timestamp} - PING (Zombie Detection)</div>
+                    <div>Ping ID: ${data.data.ping_id}</div>
+                    <div>Expected Pong: ${data.data.expected_pong}</div>
+                `;
+            } else {
+                eventDiv.innerHTML = `
+                    <div class="timestamp">${timestamp} - ${type.toUpperCase()}</div>
+                    <pre>${JSON.stringify(data.data, null, 2)}</pre>
+                `;
+            }
+            
+            eventsDiv.insertBefore(eventDiv, eventsDiv.firstChild);
+            
+            // Keep only last 50 events
+            while (eventsDiv.children.length > 50) {
+                eventsDiv.removeChild(eventsDiv.lastChild);
+            }
+            
+            updateStats();
+        }
+
+        function clearEvents() {
+            document.getElementById('events').innerHTML = '';
+            eventCount = 0;
+            updateStats();
+        }
+
+        function updateStats() {
+            const connected = eventSource && eventSource.readyState === EventSource.OPEN;
+            const statsText = `Events: ${eventCount} | Pings: ${pingCount} | Pongs: ${pongCount} | Connected: ${connected}`;
+            document.getElementById('stats').textContent = statsText;
+            
+            // Update zombie detection info
+            if (connectionHealth.missedPings > 0) {
+                const zombieDiv = document.getElementById('zombieStats');
+                zombieDiv.style.display = 'block';
+                zombieDiv.innerHTML = `
+                    <strong>Connection Health:</strong><br>
+                    Missed Pings: ${connectionHealth.missedPings}<br>
+                    Last Ping: ${connectionHealth.lastPing ? connectionHealth.lastPing.toLocaleTimeString() : 'Never'}<br>
+                    Last Pong: ${connectionHealth.lastPong ? connectionHealth.lastPong.toLocaleTimeString() : 'Never'}
+                `;
+                
+                if (connectionHealth.missedPings > 3) {
+                    document.getElementById('status').className = 'status zombie';
+                    document.getElementById('status').textContent = 'Connection Unhealthy (Zombie Risk)';
+                }
+            } else {
+                document.getElementById('zombieStats').style.display = 'none';
+            }
+        }
+
+        // Test functions
+        async function createTestJob() {
+            try {
+                const response = await fetch('/jobs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: 'test-job-' + Date.now(),
+                        description: 'Test job for SSE demonstration',
+                        metadata: { test: true }
+                    })
+                });
+                const result = await response.json();
+                showResult('Job Created', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function startTestJobRun() {
+            try {
+                const response = await fetch('/jobs/test-job/runs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        job_name: 'test-job',
+                        metadata: { inputs: ['test-table-1'], outputs: ['test-table-2'] }
+                    })
+                });
+                const result = await response.json();
+                lastRunId = result.run_id;
+                showResult('Job Run Started', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function completeTestJobRun() {
+            if (!lastRunId) {
+                showResult('Error', { error: 'No active run ID. Start a job run first.' });
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/jobs/test-job/runs/${lastRunId}/complete`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        success: true,
+                        metadata: { inputs: ['test-table-1'], outputs: ['test-table-2'] }
+                    })
+                });
+                const result = await response.json();
+                showResult('Job Run Completed', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function getQueueStats() {
+            try {
+                const response = await fetch('/events/stats');
+                const result = await response.json();
+                showResult('SSE Stats', result);
+                updateConnectionMetrics(result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function getSSEStats() {
+            try {
+                const response = await fetch('/events/stats');
+                const result = await response.json();
+                showResult('SSE Stats', result);
+                updateConnectionMetrics(result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function getZombieStats() {
+            try {
+                const response = await fetch('/events/zombies');
+                const result = await response.json();
+                showResult('Zombie Stats', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function cleanupZombies() {
+            try {
+                const response = await fetch('/events/zombies/cleanup', {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                showResult('Zombie Cleanup', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        async function testCustomEvent() {
+            try {
+                const response = await fetch('/events/broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        event_type: 'system_metric',
+                        data: {
+                            metric_type: 'test_metric',
+                            value: Math.random() * 100,
+                            metadata: { source: 'sse_test_page' }
+                        }
+                    })
+                });
+                const result = await response.json();
+                showResult('Custom Event Sent', result);
+            } catch (error) {
+                showResult('Error', { error: error.message });
+            }
+        }
+
+        function updateConnectionMetrics(stats) {
+            const metricsDiv = document.getElementById('connectionMetrics');
+            metricsDiv.innerHTML = `
+                <div class="metric-card">
+                    <div class="metric-value">${stats.connected_clients || 0}</div>
+                    <div class="metric-label">Total Clients</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${stats.healthy_clients || 0}</div>
+                    <div class="metric-label">Healthy Clients</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${stats.zombie_clients || 0}</div>
+                    <div class="metric-label">Zombie Clients</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${stats.event_history_size || 0}</div>
+                    <div class="metric-label">Event History</div>
+                </div>
+            `;
+            
+            // Update client list
+            const clientList = document.getElementById('clientList');
+            if (stats.clients) {
+                clientList.innerHTML = stats.clients.map(client => `
+                    <div class="client-item ${client.is_zombie ? 'zombie' : 'healthy'}">
+                        <strong>Client:</strong> ${client.client_id.substring(0, 8)}...<br>
+                        <strong>Status:</strong> ${client.is_zombie ? 'Zombie' : 'Healthy'}<br>
+                        <strong>Duration:</strong> ${Math.round(client.connected_duration)}s<br>
+                        <strong>Queue:</strong> ${client.queue_size} events<br>
+                        <strong>Pings:</strong> ${client.ping_count} (missed: ${client.missed_pings})<br>
+                        <strong>Errors:</strong> ${client.write_errors} write, ${client.queue_full_count} queue full
+                    </div>
+                `).join('');
+            }
+        }
+
+        function showResult(title, data) {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            resultDiv.innerHTML = `
+                <div style="margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 3px;">
+                    <strong>${title}</strong> <span class="timestamp">${timestamp}</span>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                </div>
+            `;
+            
+            resultsDiv.insertBefore(resultDiv, resultsDiv.firstChild);
+            
+            // Keep only last 5 results
+            while (resultsDiv.children.length > 5) {
+                resultsDiv.removeChild(resultsDiv.lastChild);
+            }
+        }
+
+        // Auto-update stats every 5 seconds
+        setInterval(updateStats, 5000);
+        
+        // Auto-refresh connection metrics every 10 seconds
+        setInterval(async () => {
+            if (eventSource && eventSource.readyState === EventSource.OPEN) {
+                try {
+                    const response = await fetch('/events/stats');
+                    const result = await response.json();
+                    updateConnectionMetrics(result);
+                } catch (error) {
+                    console.error('Failed to update connection metrics:', error);
+                }
+            }
+        }, 10000);
+    </script>
+</body>
+</html> 

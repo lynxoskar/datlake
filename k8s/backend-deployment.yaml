@@ -2,10 +2,13 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ducklake-backend
+  namespace: default
   labels:
     app: ducklake-backend
+    version: v1.0.2
+    component: backend
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: ducklake-backend
@@ -13,42 +16,228 @@ spec:
     metadata:
       labels:
         app: ducklake-backend
+        version: v1.0.2
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: ducklake-backend
         image: ducklake-backend:v1.0.2
-        imagePullPolicy: Never # Use Never for local development with locally built images
+        imagePullPolicy: Always  # Changed for k8s deployment
         ports:
         - containerPort: 8000
+          name: http
+          protocol: TCP
         env:
-        - name: MINIO_ENDPOINT
-          value: "minio-service.storage.svc.cluster.local:9000" # Placeholder, update with actual MinIO service
-        - name: MINIO_ACCESS_KEY
+        # Application Environment
+        - name: ENVIRONMENT
+          value: "production"
+        - name: DEBUG
+          value: "false"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        # Database Configuration
+        - name: DB_POSTGRES_HOST
+          value: "postgres-service.database.svc.cluster.local"
+        - name: DB_POSTGRES_PORT
+          value: "5432"
+        - name: DB_POSTGRES_DB
+          value: "ducklakedb"
+        - name: DB_POSTGRES_USER
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: postgres-credentials
+              key: username
+        - name: DB_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+        
+        # Database Connection Pool Settings
+        - name: DB_POSTGRES_MIN_CONNECTIONS
+          value: "5"
+        - name: DB_POSTGRES_MAX_CONNECTIONS
+          value: "20"
+        - name: DB_POSTGRES_COMMAND_TIMEOUT
+          value: "30.0"
+        
+        # DuckLake Configuration
+        - name: DB_DUCKLAKE_METADATA_SCHEMA
+          value: "main"
+        - name: DB_DUCKLAKE_METADATA_CATALOG
+          value: "ducklake_metadata"
+        - name: DB_DUCKLAKE_ENCRYPTED
+          value: "true"
+        - name: DB_DUCKLAKE_DATA_INLINING_ROW_LIMIT
+          value: "1000"
+        - name: DB_DUCKLAKE_CONNECTION_RETRIES
+          value: "3"
+        - name: DB_DUCKLAKE_CONNECTION_TIMEOUT
+          value: "30.0"
+        - name: DB_DUCKLAKE_READ_ONLY
+          value: "false"
+        
+        # Storage Configuration
+        - name: STORAGE_MINIO_ENDPOINT
+          value: "minio-service.storage.svc.cluster.local:9000"
+        - name: STORAGE_MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials  # Fixed secret name
               key: accesskey
-        - name: MINIO_SECRET_KEY
+        - name: STORAGE_MINIO_SECRET_KEY
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: minio-credentials  # Fixed secret name
               key: secretkey
+        - name: STORAGE_MINIO_SECURE
+          value: "false"
+        - name: STORAGE_MINIO_REGION
+          value: "us-east-1"
+        - name: STORAGE_DEFAULT_BUCKET
+          value: "ducklake-data"
+        - name: STORAGE_TEMP_BUCKET
+          value: "ducklake-temp"
+        
+        # Queue Configuration
+        - name: QUEUE_BATCH_SIZE
+          value: "10"
+        - name: QUEUE_POLL_INTERVAL
+          value: "5"
+        - name: QUEUE_MAX_RETRIES
+          value: "3"
+        
+        # Feature Flags
+        - name: FEATURE_ENABLE_MEMORY_MONITORING
+          value: "true"
+        - name: FEATURE_ENABLE_PERFORMANCE_TRACKING
+          value: "true"
+        - name: FEATURE_ENABLE_PROMETHEUS_METRICS
+          value: "true"
+        - name: FEATURE_ENABLE_HEALTH_CHECKS
+          value: "true"
+        - name: FEATURE_ENABLE_S3_ENCRYPTION
+          value: "true"
+        - name: FEATURE_ENABLE_LINEAGE_VALIDATION
+          value: "true"
+        - name: FEATURE_ENABLE_ADVANCED_MONITORING
+          value: "true"
+        
+        # Monitoring Configuration
+        - name: MONITORING_METRICS_ENABLED
+          value: "true"
+        - name: MONITORING_HEALTH_CHECK_TIMEOUT
+          value: "10.0"
+        - name: MONITORING_HEALTH_CHECK_INTERVAL
+          value: "30.0"
+        
+        # SSE Configuration (for zombie detection)
+        - name: SSE_HEARTBEAT_INTERVAL
+          value: "30"
+        - name: SSE_PING_INTERVAL
+          value: "45"
+        - name: SSE_ZOMBIE_CHECK_INTERVAL
+          value: "60"
+        - name: SSE_MAX_EVENT_HISTORY
+          value: "1000"
+        
         livenessProbe:
           httpGet:
             path: /health
             port: 8000
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+        
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "512Mi"  # Increased for SSE and queue processing
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
           limits:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "1Gi"    # Increased for production workload
+            cpu: "1000m"     # Increased for better performance
+            ephemeral-storage: "2Gi"
+        
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: data
+          mountPath: /app/data
+        - name: tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: logs
+        emptyDir:
+          sizeLimit: 2Gi  # Increased for more logging
+      - name: data
+        emptyDir:
+          sizeLimit: 4Gi  # Increased for data processing
+      - name: tmp
+        emptyDir:
+          sizeLimit: 2Gi  # Increased for temp files
+      
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      
+      # Node selection and affinity
+      nodeSelector:
+        kubernetes.io/os: linux
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - ducklake-backend
+              topologyKey: kubernetes.io/hostname

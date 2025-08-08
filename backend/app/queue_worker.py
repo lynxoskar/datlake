@@ -22,6 +22,7 @@ class QueueWorker:
         self.db_pool: Optional[asyncpg.Pool] = None
         self.running = False
         self.tasks = []
+        self.sse_manager = None  # Will be set during initialization
     
     async def initialize(self) -> None:
         """Initialize database connection pool"""
@@ -39,6 +40,13 @@ class QueueWorker:
         
         # Initialize lineage manager
         await lineage_manager.initialize()
+        
+        # Initialize SSE manager reference (will be set by main.py)
+        try:
+            from .sse_manager import sse_manager
+            self.sse_manager = sse_manager
+        except ImportError:
+            logger.warning("SSE manager not available")
     
     async def start(self) -> None:
         """Start the background worker"""
@@ -52,6 +60,7 @@ class QueueWorker:
         self.tasks = [
             asyncio.create_task(self._process_lineage_events()),
             asyncio.create_task(self._process_notifications()),
+            asyncio.create_task(self._broadcast_queue_metrics()),
         ]
         
         logger.info("Queue worker started")
@@ -101,6 +110,19 @@ class QueueWorker:
                             event_dict = orjson.loads(message_data) if isinstance(message_data, str) else message_data
                             event = LineageEvent(**event_dict)
                             
+                            # Broadcast event start via SSE
+                            if self.sse_manager:
+                                await self.sse_manager.broadcast_lineage_event(
+                                    event_type=event.eventType,
+                                    run_id=event.run['runId'],
+                                    job_name=event.job['name'],
+                                    status="processing",
+                                    metadata={
+                                        "msg_id": msg_id,
+                                        "namespace": event.job.get('namespace', 'default')
+                                    }
+                                )
+                            
                             # Process the event with performance tracking
                             start_time = time.time()
                             success = await lineage_manager.process_event(event)
@@ -120,15 +142,54 @@ class QueueWorker:
                                     "SELECT pgmq.delete('lineage_events', $1)",
                                     msg_id
                                 )
+                                
+                                # Broadcast successful processing via SSE
+                                if self.sse_manager:
+                                    await self.sse_manager.broadcast_lineage_event(
+                                        event_type=event.eventType,
+                                        run_id=event.run['runId'],
+                                        job_name=event.job['name'],
+                                        status="completed",
+                                        metadata={
+                                            "msg_id": msg_id,
+                                            "processing_duration": processing_duration,
+                                            "namespace": event.job.get('namespace', 'default')
+                                        }
+                                    )
+                                
                                 logger.debug(f"Processed lineage event: {event.eventType} for run {event.run['runId']}")
                             else:
                                 # Move to dead letter queue
                                 await self._move_to_dlq(conn, msg_id, message_data, "Processing failed")
                                 
+                                # Broadcast failure via SSE
+                                if self.sse_manager:
+                                    await self.sse_manager.broadcast_lineage_event(
+                                        event_type=event.eventType,
+                                        run_id=event.run['runId'],
+                                        job_name=event.job['name'],
+                                        status="failed",
+                                        metadata={
+                                            "msg_id": msg_id,
+                                            "error": "Processing failed"
+                                        }
+                                    )
+                                
                         except Exception as e:
                             logger.error(f"Error processing message {msg_id}: {e}")
                             # Move to dead letter queue
                             await self._move_to_dlq(conn, msg_id, message_data, str(e))
+                            
+                            # Broadcast error via SSE
+                            if self.sse_manager:
+                                await self.sse_manager.broadcast_error(
+                                    error_type="lineage_processing_error",
+                                    message=f"Failed to process lineage event: {str(e)}",
+                                    details={
+                                        "msg_id": msg_id,
+                                        "error": str(e)
+                                    }
+                                )
                     
                     if not rows:
                         # No messages, wait before next poll
@@ -136,6 +197,12 @@ class QueueWorker:
                         
             except Exception as e:
                 logger.error(f"Error in lineage event processing: {e}")
+                if self.sse_manager:
+                    await self.sse_manager.broadcast_error(
+                        error_type="queue_processing_error",
+                        message=f"Queue processing error: {str(e)}",
+                        details={"component": "lineage_events"}
+                    )
                 await asyncio.sleep(5)  # Wait before retrying
     
     async def _process_notifications(self) -> None:
@@ -155,7 +222,7 @@ class QueueWorker:
                         message_data = row['message']
                         
                         try:
-                            # Process notification (could trigger SSE events, webhooks, etc.)
+                            # Process notification and broadcast via SSE
                             await self._handle_notification(message_data)
                             
                             # Delete message from queue
@@ -179,6 +246,24 @@ class QueueWorker:
             except Exception as e:
                 logger.error(f"Error in notification processing: {e}")
                 await asyncio.sleep(5)
+    
+    async def _broadcast_queue_metrics(self) -> None:
+        """Periodically broadcast queue metrics via SSE"""
+        while self.running:
+            try:
+                # Get queue statistics
+                queue_stats = await self.get_queue_stats()
+                
+                # Broadcast queue metrics via SSE
+                if self.sse_manager and queue_stats:
+                    await self.sse_manager.broadcast_queue_status(queue_stats)
+                
+                # Wait before next broadcast
+                await asyncio.sleep(30)  # Broadcast every 30 seconds
+                
+            except Exception as e:
+                logger.error(f"Error broadcasting queue metrics: {e}")
+                await asyncio.sleep(30)
     
     async def _move_to_dlq(self, conn: asyncpg.Connection, msg_id: int, message_data: Any, error: str) -> None:
         """Move a failed message to dead letter queue"""
@@ -209,14 +294,48 @@ class QueueWorker:
             logger.error(f"Failed to move message {msg_id} to DLQ: {e}")
     
     async def _handle_notification(self, message_data: Any) -> None:
-        """Handle real-time notification"""
-        # This could be extended to:
-        # - Send SSE events to connected clients
-        # - Trigger webhooks
-        # - Update caches
-        # - Send alerts
-        
-        logger.debug(f"Processed notification: {message_data}")
+        """Handle real-time notification and broadcast via SSE"""
+        try:
+            # Parse notification data
+            if isinstance(message_data, str):
+                notification = orjson.loads(message_data)
+            else:
+                notification = message_data
+            
+            # Broadcast notification via SSE
+            if self.sse_manager:
+                notification_type = notification.get('type', 'general')
+                
+                if notification_type == 'job_status':
+                    await self.sse_manager.broadcast_job_status(
+                        job_name=notification.get('job_name', 'unknown'),
+                        run_id=notification.get('run_id', 'unknown'),
+                        status=notification.get('status', 'unknown'),
+                        progress=notification.get('progress')
+                    )
+                elif notification_type == 'system_metric':
+                    await self.sse_manager.broadcast_system_metric(
+                        metric_type=notification.get('metric_type', 'unknown'),
+                        value=notification.get('value'),
+                        metadata=notification.get('metadata', {})
+                    )
+                else:
+                    # Generic notification
+                    await self.sse_manager.broadcast_event(
+                        event_type="notification",
+                        data=notification
+                    )
+            
+            logger.debug(f"Processed notification: {notification}")
+            
+        except Exception as e:
+            logger.error(f"Error handling notification: {e}")
+            if self.sse_manager:
+                await self.sse_manager.broadcast_error(
+                    error_type="notification_processing_error",
+                    message=f"Failed to process notification: {str(e)}",
+                    details={"notification_data": str(message_data)}
+                )
     
     async def get_queue_stats(self) -> Dict[str, Any]:
         """Get queue statistics"""
@@ -227,11 +346,18 @@ class QueueWorker:
                 
                 queues = ['lineage_events', 'lineage_events_dlq', 'lineage_notifications']
                 for queue_name in queues:
-                    row = await conn.fetchrow(
-                        "SELECT queue_length FROM pgmq.metrics($1)",
-                        queue_name
-                    )
-                    stats[queue_name] = row['queue_length'] if row else 0
+                    try:
+                        row = await conn.fetchrow(
+                            "SELECT queue_length FROM pgmq.metrics($1)",
+                            queue_name
+                        )
+                        stats[queue_name] = row['queue_length'] if row else 0
+                    except Exception:
+                        stats[queue_name] = 0
+                
+                # Add total messages
+                stats['total_messages'] = sum(stats.values())
+                stats['timestamp'] = time.time()
                 
                 return stats
         except Exception as e:

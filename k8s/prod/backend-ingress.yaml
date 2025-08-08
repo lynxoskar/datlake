@@ -1,0 +1,87 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ducklake-backend-ingress-prod
+  namespace: default
+  labels:
+    app: ducklake-backend
+    environment: production
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # SSE specific annotations for production
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+    # Rate limiting for production
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-burst: "50"
+    # CORS for production (more restrictive)
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://your-frontend-domain.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Accept,Authorization"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    # Enable cert-manager for automatic TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.datlake.your-domain.com  # Change to your actual domain
+    secretName: ducklake-backend-tls-prod
+  rules:
+  - host: api.datlake.your-domain.com  # Change to your actual domain
+    http:
+      paths:
+      # Health check endpoint
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: ducklake-backend-clusterip
+            port:
+              number: 80
+      # API endpoints
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ducklake-backend-clusterip
+            port:
+              number: 80
+      # SSE endpoints (with special handling)
+      - path: /events
+        pathType: Prefix
+        backend:
+          service:
+            name: ducklake-backend-clusterip
+            port:
+              number: 80
+
+---
+# Production ClusterIP service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ducklake-backend-clusterip-prod
+  namespace: default
+  labels:
+    app: ducklake-backend
+    environment: production
+spec:
+  type: ClusterIP
+  selector:
+    app: ducklake-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+      name: http 
